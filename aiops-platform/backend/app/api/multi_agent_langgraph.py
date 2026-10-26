@@ -36,6 +36,7 @@ async def process_multi_agent_query(request: LangGraphRequest):
         result = await _graph.ainvoke(
             {
                 "user_query": request.query,
+                "visited_nodes": [],
                 "messages": [],
                 "iteration_count": 0,
                 "need_ssh_login": False,

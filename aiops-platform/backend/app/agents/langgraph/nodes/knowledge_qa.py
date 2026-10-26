@@ -16,7 +16,7 @@ async def knowledge_qa_node(state: AIOpsState) -> dict:
     )
 
     knowledge_result = await _knowledge_agent.query(
-        service=service, symptom=symptom_str
+        service=service, symptom=symptom_str, user_query=state.get("user_query", "")
     )
 
     knowledge_dict = (

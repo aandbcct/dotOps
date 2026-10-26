@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, Table, Tag, Input, Select, Space, Button, message, Row, Col, Statistic, Modal, Descriptions, Timeline, Badge, Tabs } from 'antd';
+import { Alert, Card, Table, Tag, Input, Select, Space, Button, message, Row, Col, Statistic, Modal, Descriptions, Timeline, Badge, Tabs } from 'antd';
 import { SearchOutlined, ReloadOutlined, ApiOutlined, WarningOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import dayjs from 'dayjs';
@@ -19,6 +19,7 @@ const Tracing = () => {
   const [errorOnly, setErrorOnly] = useState(false);
   const [slowOnly, setSlowOnly] = useState(false);
   const [activeTab, setActiveTab] = useState('traces');
+  const [dataNotice, setDataNotice] = useState('');
 
   const fetchTraces = async () => {
     setLoading(true);
@@ -31,7 +32,11 @@ const Tracing = () => {
         limit: 50,
       });
       setTraces(result.traces);
+      setDataNotice(result.source === 'mock_data' ? '演示模式：当前链路数据为模拟数据' : '');
     } catch (error) {
+      setTraces([]);
+      setSelectedTrace(null);
+      setDataNotice('真实链路数据尚未接入或查询失败，没有使用模拟数据补齐。');
       message.error('获取链路数据失败');
     } finally {
       setLoading(false);
@@ -42,7 +47,10 @@ const Tracing = () => {
     try {
       const result = await traceApi.getServiceDependency(lookback);
       setDependency(result);
+      setDataNotice(result.source === 'mock_data' ? '演示模式：当前服务依赖为模拟数据' : '');
     } catch (error) {
+      setDependency(null);
+      setDataNotice('真实服务依赖尚未接入或查询失败，没有使用模拟数据补齐。');
       message.error('获取服务依赖失败');
     }
   };
@@ -240,6 +248,7 @@ const Tracing = () => {
 
   return (
     <div>
+      {dataNotice && <Alert type="warning" showIcon message={dataNotice} style={{ marginBottom: 16 }} />}
       <Card style={{ marginBottom: 16 }}>
         <Row gutter={16} align="middle">
           <Col span={6}>

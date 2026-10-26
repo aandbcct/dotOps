@@ -76,7 +76,9 @@ class KnowledgeExpertAgent:
 请参考以上排查方法，结合实际情况给出建议。
 """
         
-        return f"""你是一个运维知识库专家。你连接着企业的 SOP 文档库、历史故障复盘报告 和 CMDB 知识图谱。
+        return f"""你是一个运维知识问答助手，只能依据下面实际提供的内容回答。
+不得声称已连接未提供数据的系统，不得把模拟数据当成事实。
+没有证据时明确说明，建议不等于已执行的操作，也不等于已确认根因。
 
 系统为你检索了以下上下文：
 
@@ -94,18 +96,20 @@ SOP 推荐：匹配最标准的应急处置步骤。
 Output Format
 结构化建议：
 
-拓扑风险点: [例如：该服务强依赖 Redis 集群 A，该集群 5 分钟前有主从切换]
-推荐方案: 重启服务以释放连接池资源（参考案例 #INC-2023-011）。
-执行 SOP: [SOP-DB-002] 数据库连接池应急扩容步骤。
+拓扑风险点: [仅列出有真实证据支持的风险；否则注明无数据]
+推荐方案: [仅提出建议，不表示已执行]
+执行 SOP: [仅引用实际检索到的文档；没有文档则注明未接入]
 排查建议: [参考 debug_skill.md 中的具体排查步骤]"""
 
-    async def query(self, service: str, symptom: str, topology_info: Dict = None, rag_context: str = None) -> KnowledgeResult:
+    async def query(self, service: str, symptom: str, topology_info: Dict = None, rag_context: str = None, user_query: str = "") -> KnowledgeResult:
         if topology_info is None:
             topology_info = await self._query_knowledge_graph(service)
         if rag_context is None:
             rag_context = await self._query_rag(f"{service} {symptom} 故障处理")
         
         prompt = self._build_prompt(service, symptom, topology_info, rag_context)
+        if user_query:
+            prompt += f"\n用户原始问题：{user_query}\n优先回答原始问题。概念问答不需要生成故障分析报告。"
         
         try:
             response = self.client.chat.completions.create(
@@ -123,9 +127,16 @@ Output Format
             knowledge_report=content,
             topology_info=TopologyInfo(**topology_info) if isinstance(topology_info, dict) else TopologyInfo(),
             rag_context=rag_context or "",
+            data_sources={
+                "answer": "model_generated",
+                "topology": topology_info.get("source", "unavailable"),
+                "rag": "mock_data" if settings.MOCK_ENABLED else ("ops_rag_service" if rag_context else "unavailable"),
+            },
         )
     
     async def _query_knowledge_graph(self, service: str) -> Dict:
+        if settings.MOCK_ENABLED:
+            return self._get_mock_topology(service)
         try:
             driver = self._get_neo4j_driver()
             
@@ -172,17 +183,20 @@ Output Format
                         "source": "neo4j_kg_fuzzy"
                     }
                 
-                return self._get_mock_topology(service)
+                return {"service": service, "source": "no_data", "status": "no_data"}
                 
         except Exception as e:
-            logger.error(f"[MOCK DATA] Neo4j 查询失败: {str(e)}，fallback 到模拟数据")
+            logger.error(f"Neo4j 查询失败: {str(e)}")
             return {
                 "service": service,
                 "error": str(e),
-                **self._get_mock_topology(service)
+                "source": "error",
+                "status": "error",
             }
     
     async def _query_rag(self, query: str) -> str:
+        if settings.MOCK_ENABLED:
+            return "[模拟数据] 示例 SOP：先检查服务 HTTP 健康接口，再按实际响应继续排查。"
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
@@ -194,11 +208,11 @@ Output Format
                     data = response.json()
                     return data.get("answer", "")
         except Exception as e:
-            logger.warning(f"[MOCK DATA] RAG 服务 ({settings.RAG_SERVICE_URL}) 不可用: {str(e)}，将使用空上下文")
+            logger.warning(f"RAG 服务 ({settings.RAG_SERVICE_URL}) 不可用: {str(e)}，没有检索上下文")
         return ""
     
     def _get_mock_topology(self, service: str) -> Dict:
-        logger.warning(f"[MOCK DATA] Neo4j 不可用或未找到服务 '{service}'，返回模拟拓扑数据。此数据仅供参考，不应用于生产诊断决策。")
+        logger.warning(f"[MOCK DATA] 演示模式返回服务 '{service}' 的模拟拓扑，不能用于真实诊断决策。")
         
         topology_map = {
             "order-service": {
@@ -228,15 +242,21 @@ Output Format
             }
         }
         
+        mock_topology = topology_map.get(service, {})
+        # 历史服务器示例保存的是名称列表，输出统一为结构化依赖。
+        mock_topology = {**mock_topology, "dependencies": [
+            {"name": name} for name in mock_topology.get("dependencies", [])
+        ]}
         return {
             "service": service,
-            "dependencies": topology_map.get(service, []),
+            "dependencies": [],
+            **mock_topology,
             "recent_changes": [
                 {"component": "redis-cluster", "change": "主从切换", "time": "5分钟前"}
             ],
             "_is_mock": True,
             "source": "mock_data",
-            "disclaimer": "⚠️ 此为模拟数据，Neo4j 知识图谱不可用。请检查 NEO4J_URI/NEO4J_PASSWORD 配置。"
+            "disclaimer": "演示模式：此为模拟数据，不表示真实故障。"
         }
     
     async def get_topology_graph(self, service: str = None, depth: int = 2) -> Dict:

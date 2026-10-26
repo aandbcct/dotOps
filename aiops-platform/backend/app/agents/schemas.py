@@ -41,6 +41,8 @@ class TopologyInfo(BaseModel):
     downstream: List[str] = Field(default_factory=list)
     critical_deps: List[str] = Field(default_factory=list)
     source: str = Field("unknown", description="数据来源: neo4j_kg, neo4j_kg_fuzzy, mock_data, error")
+    status: str = "available"
+    error: Optional[str] = None
 
 
 class KnowledgeResult(BaseModel):
@@ -49,6 +51,7 @@ class KnowledgeResult(BaseModel):
     knowledge_report: str = ""
     topology_info: TopologyInfo = Field(default_factory=TopologyInfo)
     rag_context: str = ""
+    data_sources: Dict[str, str] = Field(default_factory=dict)
 
 
 class ServerAnalysis(BaseModel):

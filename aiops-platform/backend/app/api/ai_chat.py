@@ -331,11 +331,17 @@ async def chat_stream(
             
             full_content = ""
             async for chunk in response:
+                # 用量统计等元数据块不包含候选回答，不能直接访问首个元素。
+                if not chunk.choices:
+                    continue
                 if chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_content += content
                     yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
             
+            if not full_content.strip():
+                raise ValueError("模型未返回有效的文本内容，请稍后重试")
+
             await session_manager.add_message(session_id, "assistant", full_content)
             
             session = await session_manager.get_session(session_id)

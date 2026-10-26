@@ -1,5 +1,6 @@
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from collections.abc import Awaitable, Callable
 
 from .state import AIOpsState
 from .nodes import (
@@ -28,14 +29,22 @@ def _route_approval(state: AIOpsState) -> str:
 def build_aiops_graph():
     graph = StateGraph(AIOpsState)
 
-    graph.add_node("intent_parse", intent_parse_node)
-    graph.add_node("ssh_check", ssh_check_node)
-    graph.add_node("skill_match", skill_match_node)
-    graph.add_node("react_agent", react_agent_node)
-    graph.add_node("knowledge_qa", knowledge_qa_node)
-    graph.add_node("approval", approval_node)
-    graph.add_node("human_review", human_review_node)
-    graph.add_node("finalize", finalize_node)
+    # 仅记录实际完成的节点，供页面区分执行与未执行步骤。
+    def tracked(name: str, node: Callable[[AIOpsState], Awaitable[dict]]) -> Callable[[AIOpsState], Awaitable[dict]]:
+        async def run(state: AIOpsState) -> dict:
+            updates = await node(state)
+            updates["visited_nodes"] = state.get("visited_nodes", []) + [name]
+            return updates
+        return run
+
+    graph.add_node("intent_parse", tracked("intent_parse", intent_parse_node))
+    graph.add_node("ssh_check", tracked("ssh_check", ssh_check_node))
+    graph.add_node("skill_match", tracked("skill_match", skill_match_node))
+    graph.add_node("react_agent", tracked("react_agent", react_agent_node))
+    graph.add_node("knowledge_qa", tracked("knowledge_qa", knowledge_qa_node))
+    graph.add_node("approval", tracked("approval", approval_node))
+    graph.add_node("human_review", tracked("human_review", human_review_node))
+    graph.add_node("finalize", tracked("finalize", finalize_node))
 
     graph.set_entry_point("intent_parse")
 

@@ -6,14 +6,15 @@
 
 import logging
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta
 import random
 import uuid
+from app.core.mock_mode import require_mock_mode
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/traces", tags=["tracing"])
+router = APIRouter(prefix="/api/traces", tags=["tracing"], dependencies=[Depends(require_mock_mode)])
 
 
 class TraceSearchParams(BaseModel):
@@ -193,6 +194,7 @@ async def search_traces(
         
         return {
             "total": len(traces),
+            "source": "mock_data",
             "traces": traces,
             "lookback": lookback
         }
@@ -211,6 +213,7 @@ async def get_service_dependency(lookback: str = "24h"):
     """
     try:
         dependency = generate_mock_dependency(lookback)
+        dependency["source"] = "mock_data"
         return dependency
     except Exception as e:
         logger.error(f"Failed to get service dependency: {e}", exc_info=True)
@@ -227,6 +230,7 @@ async def get_trace_by_id(trace_id: str):
     """
     try:
         trace = generate_mock_trace_detail(trace_id)
+        trace["source"] = "mock_data"
         return trace
     except Exception as e:
         logger.error(f"Failed to get trace detail: {e}", exc_info=True)
@@ -249,6 +253,7 @@ async def analyze_trace(params: TraceAnalysisParams):
             
             return {
                 "success": True,
+                "source": "mock_data",
                 "trace_id": params.trace_id,
                 "trace": trace,
                 "performance_analysis": {
@@ -275,6 +280,7 @@ async def analyze_trace(params: TraceAnalysisParams):
             
             return {
                 "success": True,
+                "source": "mock_data",
                 "total_traces": len(traces),
                 "traces": traces,
                 "lookback": params.lookback

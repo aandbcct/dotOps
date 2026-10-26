@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Card, Input, Button, Tag, Steps, Spin, message, Typography, Collapse, Descriptions, Space } from 'antd';
+import { Alert, Card, Grid, Input, Button, Tag, Steps, Spin, message, Typography, Collapse, Descriptions, Space } from 'antd';
 import { SendOutlined } from '@ant-design/icons';
 
 import { agentApi } from '../services/api';
@@ -10,6 +10,7 @@ const { Title, Text, Paragraph } = Typography;
 const { Panel } = Collapse;
 
 const Diagnose = () => {
+  const screens = Grid.useBreakpoint();
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [currentTask, setCurrentTask] = useState<AgentTask | null>(null);
@@ -107,26 +108,19 @@ const Diagnose = () => {
         email_approval: emailApproval,
         raw_response: data.raw_response,
         saved_to: data.saved_to,
+        data_mode: data.data_mode,
+        data_sources: data.data_sources,
+        diagnosis_status: data.diagnosis_status,
+        http_evidence: data.http_evidence,
+        stage_progress: data.stage_progress,
       });
       
-      message.success('诊断完成');
+      message.success('请求处理结束');
     } catch (error) {
       message.error('诊断失败');
     } finally {
       setLoading(false);
     }
-  };
-
-  const getCurrentStep = () => {
-    if (!currentTask) return -1;
-    if (currentTask.status === 'pending') return 0;
-    if (currentTask.status === 'needs_confirmation') {
-      if (currentTask.email_approval?.email_sent) return 3;
-      return 0;
-    }
-    if (currentTask.status === 'completed') return 4;
-    if (currentTask.status === 'failed') return -1;
-    return 0;
   };
 
   const getRiskColor = (risk: string) => {
@@ -145,7 +139,7 @@ const Diagnose = () => {
   };
 
   return (
-    <div>
+    <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
       <Card title="故障诊断" style={{ marginBottom: 16 }}>
         <Space.Compact style={{ width: '100%' }}>
           <TextArea
@@ -169,19 +163,46 @@ const Diagnose = () => {
 
       {currentTask && (
         <Card style={{ marginBottom: 16 }}>
-          <Steps
-            current={getCurrentStep()}
-            status={currentTask.status === 'failed' ? 'error' : 'process'}
-            items={[
-              { title: '意图识别', description: 'NER + Intent Parsing' },
-              { title: 'Skill 匹配', description: 'Skill Manager' },
-              { title: '故障诊断', description: 'ReAct Agent (LangGraph)' },
-              { title: '人工审批', description: 'Human-in-the-Loop' },
-              { title: '结果汇总', description: 'Finalize' },
-            ]}
+          <Alert
+            type={currentTask.data_mode === 'mock' ? 'warning' : 'info'}
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={currentTask.data_mode === 'mock' ? '演示模式：可能包含模拟数据' : '真实模式：未接入或查询失败不会使用模拟数据补齐'}
+            description={currentTask.diagnosis_status === 'evidence_available' ? '已有 HTTP 探测证据，不代表已确认根因或完成修复。' : '尚无 HTTP 探测证据，模型建议不等于实际执行。'}
           />
+          <Steps
+            size="small"
+            direction={screens.xl ? 'horizontal' : 'vertical'}
+            responsive
+            items={(currentTask.stage_progress || []).map(step => ({
+              title: step.title,
+              status: step.status,
+              description: step.status === 'finish' ? '节点已运行' : '未执行',
+            }))}
+          />
+          <Space wrap style={{ marginTop: 16 }}>
+            {Object.entries(currentTask.data_sources || {}).map(([key, source]) => (
+              <Tag key={key} color={source === 'mock_data' ? 'orange' : source === 'model_generated' ? 'blue' : 'default'}>
+                {key}: {source === 'model_generated' ? '模型建议' : source === 'mock_data' ? '模拟数据' : source}
+              </Tag>
+            ))}
+          </Space>
         </Card>
       )}
+
+      {(currentTask?.http_evidence || []).map((evidence, index) => (
+        <section key={`${evidence.checked_at}-${index}`} style={{ marginBottom: 24 }}>
+          <Title level={5}>HTTP 探测原始结果 <Tag color={evidence.source === 'http_probe' ? 'green' : 'default'}>{evidence.source === 'http_probe' ? '真实探测' : '未探测'}</Tag></Title>
+          <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
+            <Descriptions.Item label="目标"><Text style={{ wordBreak: 'break-all' }}>{evidence.target}</Text></Descriptions.Item>
+            <Descriptions.Item label="检查时间"><Text style={{ wordBreak: 'break-all' }}>{evidence.checked_at}</Text></Descriptions.Item>
+            <Descriptions.Item label="HTTP 状态码">{evidence.status_code ?? '未收到响应'}</Descriptions.Item>
+            <Descriptions.Item label="耗时">{evidence.duration_ms} ms</Descriptions.Item>
+            <Descriptions.Item label="结果">{evidence.status}</Descriptions.Item>
+            {evidence.error && <Descriptions.Item label="错误">{evidence.error}</Descriptions.Item>}
+          </Descriptions>
+        </section>
+      ))}
 
       {currentTask && currentTask.status === 'completed' && (
         <>
@@ -362,7 +383,7 @@ const Diagnose = () => {
               </Panel>
             )}
 
-            <Panel header="观测分析报告" key="2">
+            <Panel header="模型分析与诊断计划（非执行证据）" key="2">
               {currentTask.analysis_report && (
                 <div>
                   {currentTask.analysis_report.diagnosis_plan && (
@@ -388,7 +409,7 @@ const Diagnose = () => {
               )}
             </Panel>
 
-            <Panel header="知识库检索" key="3">
+            <Panel header="知识查询记录" key="3">
               {currentTask.knowledge_context && (
                 <Paragraph style={{ whiteSpace: 'pre-wrap' }}>
                   {currentTask.knowledge_context.knowledge_report}
@@ -449,7 +470,7 @@ const Diagnose = () => {
             </Panel>
 
             {currentTask.action_result && (
-              <Panel header="执行指令" key="5">
+            <Panel header="执行信息（不代表已完成修复）" key="5">
                 <Descriptions column={2} size="small">
                   <Descriptions.Item label="工具">{currentTask.action_result.tool_name}</Descriptions.Item>
                   <Descriptions.Item label="模板">{currentTask.action_result.template_name}</Descriptions.Item>

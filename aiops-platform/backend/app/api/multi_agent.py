@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.agents.langgraph import build_aiops_graph, AIOpsState
+from app.core.config import settings
 
 router = APIRouter(prefix="/api/multi-agent", tags=["multi-agent"])
 
@@ -57,6 +58,7 @@ async def process_multi_agent_query(
         result = await _graph.ainvoke(
             {
                 "user_query": request.query,
+                "visited_nodes": [],
                 "messages": [],
                 "iteration_count": 0,
                 "need_ssh_login": False,
@@ -70,11 +72,12 @@ async def process_multi_agent_query(
         )
 
         intent_data = result.get("intent_data", {})
-        diagnosis_result = result.get("diagnosis_result", {})
+        diagnosis_result = result.get("diagnosis_result") or {}
         confirmation_request = result.get("confirmation_request")
         approval_status = result.get("approval_status")
         matched_skills = result.get("matched_skills", [])
-        warning_cleared = result.get("warning_cleared", False)
+        # 模型声明不能作为已修复的证据，本接口尚无修复后复核机制。
+        warning_cleared = False
 
         entities_raw = intent_data.get("entities", {})
         services_list = entities_raw.get("services", [])
@@ -112,7 +115,7 @@ async def process_multi_agent_query(
                     problem_type = "knowledge_qa"
 
             final_decision = {
-                "decision": "RESOLVED" if problem_type in ("none", "knowledge_qa") else "MANUAL_INTERVENTION",
+                "decision": "KNOWLEDGE_QA" if problem_type == "knowledge_qa" else "MANUAL_INTERVENTION",
                 "is_final": True,
                 "problem_type": problem_type,
                 "root_cause": diagnosis_result.get("root_cause", diagnosis_result.get("knowledge_report", "")[:200]),
@@ -164,11 +167,14 @@ async def process_multi_agent_query(
         diagnosis_plan_from_history = None
         command_entries = []
         email_entry = None
+        http_evidence = []
 
         for entry in execution_history:
             tool = entry.get("tool", "")
             args = entry.get("args", {}) or {}
             res = entry.get("result", {}) or {}
+            if tool == "probe_test_web" and isinstance(res, dict):
+                http_evidence.append(res)
 
             if tool == "save_diagnosis_plan":
                 diagnosis_plan_from_history = {
@@ -219,13 +225,10 @@ async def process_multi_agent_query(
             if isinstance(km, dict):
                 analysis_report = km.get("knowledge_report", str(km)[:500])
 
-        knowledge_report = ""
-        if diagnosis_result.get("root_cause"):
-            knowledge_report += f"根本原因: {diagnosis_result['root_cause']}\n\n"
-        if analysis_report:
-            knowledge_report += analysis_report
+        # 模型总结不能冒充知识检索结果。
+        knowledge_report = (result.get("knowledge_context") or {}).get("knowledge_report", "")
         if not knowledge_report:
-            knowledge_report = "诊断分析进行中..."
+            knowledge_report = "本次未执行知识查询，或未返回知识数据。"
 
         stages = {
             "intent_parsing": {
@@ -265,9 +268,27 @@ async def process_multi_agent_query(
             "execution_note": diagnosis_result.get("recommendation", "诊断完成，详见上方报告"),
         }
 
+        visited = result.get("visited_nodes", [])
+        node_labels = {
+            "intent_parse": "意图识别", "ssh_check": "连接信息检查",
+            "skill_match": "Skill 匹配", "react_agent": "工具诊断",
+            "knowledge_qa": "知识问答", "approval": "审批请求登记",
+            "human_review": "人工补充信息", "finalize": "结果整理",
+        }
+        progress = [
+            {"node": node, "title": label, "status": "finish" if node in visited else "wait"}
+            for node, label in node_labels.items()
+        ]
+        knowledge_sources = (result.get("knowledge_context") or {}).get("data_sources", {})
+
         return JSONResponse(
             content={
                 "query": request.query,
+                "data_mode": "mock" if settings.MOCK_ENABLED else "real",
+                "data_sources": {"analysis": "model_generated", **knowledge_sources},
+                "diagnosis_status": "evidence_available" if any(e.get("source") == "http_probe" for e in http_evidence) else "insufficient_evidence",
+                "http_evidence": http_evidence,
+                "stage_progress": progress,
                 "start_time": start_time.isoformat(),
                 "end_time": end_time.isoformat(),
                 "duration_seconds": (end_time - start_time).total_seconds(),
@@ -309,6 +330,7 @@ async def process_multi_agent_stream(request: MultiAgentRequest):
         async for event in _graph.astream_events(
             {
                 "user_query": request.query,
+                "visited_nodes": [],
                 "messages": [],
                 "iteration_count": 0,
                 "need_ssh_login": False,

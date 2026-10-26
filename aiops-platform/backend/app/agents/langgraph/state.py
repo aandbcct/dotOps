@@ -5,6 +5,7 @@ from langgraph.graph.message import add_messages
 class AIOpsState(TypedDict):
     messages: Annotated[list, add_messages]
     user_query: str
+    visited_nodes: List[str]
     intent_data: Optional[Dict[str, Any]]
     entities: Optional[Dict[str, Any]]
     intent_type: Optional[str]

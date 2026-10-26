@@ -8,12 +8,13 @@ import logging
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel, Field
 import random
+from app.core.mock_mode import require_mock_mode
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/rca", tags=["rca"])
+router = APIRouter(prefix="/api/rca", tags=["rca"], dependencies=[Depends(require_mock_mode)])
 
 _reports_store: Dict[str, Dict[str, Any]] = {}
 
@@ -30,6 +31,7 @@ class RCARequest(BaseModel):
 class RCAResponse(BaseModel):
     """根因分析响应"""
     report_id: str
+    source: str = "mock_data"
     service_name: Optional[str]
     time_window_minutes: int
     status: str
@@ -117,6 +119,7 @@ def generate_mock_rca_report(service_name: Optional[str], time_window_minutes: i
     
     return {
         "report_id": report_id,
+        "source": "mock_data",
         "service_name": service_name or "order-service",
         "time_window_minutes": time_window_minutes,
         "status": "completed",

@@ -379,6 +379,8 @@ Output Format
         }
     
     def _generate_mock_metrics(self, service: str) -> Dict:
+        if not settings.MOCK_ENABLED:
+            return {"service": service, "source": "unavailable", "error": "没有真实指标数据，模拟数据已关闭"}
         logger.warning(f"[MOCK DATA] 监控数据源不可用，为服务 '{service}' 返回模拟指标。此数据仅供参考，不应用于生产诊断决策。")
         return {
             "service": service,
@@ -397,6 +399,8 @@ Output Format
         }
     
     def _generate_mock_logs(self, service: str) -> Dict:
+        if not settings.MOCK_ENABLED:
+            return {"service": service, "source": "unavailable", "error": "没有真实日志数据，模拟数据已关闭"}
         logger.warning(f"[MOCK DATA] 日志数据源不可用，为服务 '{service}' 返回模拟日志。此数据仅供参考，不应用于生产诊断决策。")
         return {
             "service": service,
@@ -416,6 +420,8 @@ Output Format
         }
     
     def _generate_mock_traces(self, service: str) -> Dict:
+        if not settings.MOCK_ENABLED:
+            return {"service": service, "source": "unavailable", "error": "没有真实链路数据，模拟数据已关闭"}
         logger.warning(f"[MOCK DATA] 链路追踪数据源不可用，为服务 '{service}' 返回模拟链路数据。此数据仅供参考，不应用于生产诊断决策。")
         return {
             "service": service,

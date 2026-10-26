@@ -12,6 +12,8 @@ RUN npm run build
 # --- Stage 2: Serve ---
 FROM nginx:1.25-alpine
 
+RUN apk add --no-cache curl
+
 # 复制自定义 nginx 配置
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 

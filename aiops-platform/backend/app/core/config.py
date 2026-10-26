@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     APP_NAME: str = "AIOps Platform"
     DEBUG: bool = True
+    # 演示模式显式启用，真实查询失败时不得自动使用模拟数据。
+    MOCK_ENABLED: bool = False
     
     SECRET_KEY: str = ""
     

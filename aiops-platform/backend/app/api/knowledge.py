@@ -39,6 +39,8 @@ def get_neo4j_driver():
 
 @router.get("/query")
 async def query_knowledge_graph(service: str = None, query: str = None):
+    if settings.MOCK_ENABLED:
+        return {"query": query or service, "result": _get_mock_kg_data(service), "source": "mock_data"}
     try:
         driver = get_neo4j_driver()
         
@@ -62,7 +64,8 @@ async def query_knowledge_graph(service: str = None, query: str = None):
         return {
             "query": query or service,
             "error": str(e),
-            "fallback": _get_mock_kg_data(service)
+            "source": "error",
+            "status": "error",
         }
 
 def _query_service_info(session, service_name: str) -> Dict:
@@ -188,6 +191,11 @@ def _query_by_natural_language(session, query: str) -> Dict:
 
 @router.post("/rag/query", response_model=RAGQueryResponse)
 async def query_rag(request: RAGQueryRequest):
+    if settings.MOCK_ENABLED:
+        return RAGQueryResponse(
+            query=request.query, answer="[模拟数据] 示例知识检索结果",
+            documents=_get_mock_rag_docs(request.query), source="mock_data",
+        )
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -210,16 +218,16 @@ async def query_rag(request: RAGQueryRequest):
                 return RAGQueryResponse(
                     query=request.query,
                     answer="RAG 服务暂时不可用",
-                    documents=_get_mock_rag_docs(request.query),
-                    source="mock_data"
+                    documents=[],
+                    source="unavailable"
                 )
                 
     except Exception as e:
         return RAGQueryResponse(
             query=request.query,
             answer=f"查询出错: {str(e)}",
-            documents=_get_mock_rag_docs(request.query),
-            source="mock_data"
+            documents=[],
+            source="error"
         )
 
 @router.get("/topology")

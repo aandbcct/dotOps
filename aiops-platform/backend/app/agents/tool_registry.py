@@ -11,6 +11,7 @@ from pathlib import Path
 from ..utils.file_manager import IntermediateFileManager
 from ..utils.logger import get_logger
 from ..core.config import settings
+from .http_probe import probe_test_web
 
 logger = get_logger("tool_registry")
 
@@ -68,6 +69,7 @@ class ToolRegistry:
         注册默认工具
         """
         self.register("execute_command", self._execute_command)
+        self.register("probe_test_web", probe_test_web)
         self.register("save_diagnosis_plan", self._save_diagnosis_plan)
         self.register("save_execution_output", self._save_execution_output)
         self.register("query_knowledge_graph", self._query_knowledge_graph)
@@ -1839,6 +1841,18 @@ class ToolRegistry:
         获取 LLM function calling 格式的工具定义
         """
         return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "probe_test_web",
+                    "description": "只读探测本地测试 Web 服务健康接口，返回真实 HTTP 状态、时间、耗时或连接错误；不使用 SSH，不执行命令。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"url": {"type": "string", "enum": ["http://test-web/health"]}},
+                        "required": ["url"],
+                    },
+                },
+            },
             {
                 "type": "function",
                 "function": {

@@ -74,6 +74,22 @@ export interface AgentTask {
   skill_matching?: SkillMatchInfo | null;
   email_approval?: EmailApprovalInfo | null;
   saved_to?: string;
+  data_mode?: 'real' | 'mock';
+  data_sources?: Record<string, string>;
+  diagnosis_status?: 'evidence_available' | 'insufficient_evidence';
+  http_evidence?: HttpProbeEvidence[];
+  stage_progress?: Array<{ node: string; title: string; status: 'finish' | 'wait' }>;
+}
+
+export interface HttpProbeEvidence {
+  target: string;
+  checked_at: string;
+  source: string;
+  success: boolean;
+  status: string;
+  status_code: number | null;
+  duration_ms: number;
+  error?: string;
 }
 
 export interface SkillMatchInfo {
@@ -259,6 +275,7 @@ export interface AlertIngestResponse {
 }
 
 export interface TraceSearchResult {
+  source?: string;
   total: number;
   traces: TraceInfo[];
   lookback: string;
@@ -303,6 +320,7 @@ export interface SpanTreeNode {
 }
 
 export interface ServiceDependency {
+  source?: string;
   nodes: Array<{ id: string; name: string }>;
   edges: ServiceEdge[];
   total_services: number;

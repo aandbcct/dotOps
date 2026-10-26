@@ -223,6 +223,10 @@ const KnowledgeGraph = () => {
     return (
       <Card title="知识图谱查询结果" style={{ marginTop: 16 }}>
         <Space direction="vertical" style={{ width: '100%' }}>
+          <Tag color={kgResult.source === 'mock_data' ? 'orange' : 'default'}>
+            {kgResult.source === 'mock_data' ? '模拟数据' : `来源: ${kgResult.source}`}
+          </Tag>
+          {kgResult.error && <Text type="danger">{kgResult.error}</Text>}
           <div>
             <Text strong>查询: </Text>
             <Text>{kgResult.query}</Text>
