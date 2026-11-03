@@ -1,4 +1,4 @@
-"""验证真实模式、演示模式、只读探测与执行证据边界。"""
+"""验证真实模式、演示模式、工具注册与执行证据边界。"""
 
 import json
 import unittest
@@ -6,11 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+from fastapi import HTTPException
 
 from app.main import app
 from app.api import knowledge, multi_agent
 from app.core.config import settings
-from app.agents.http_probe import TEST_WEB_URL, probe_test_web
 from app.agents.knowledge import KnowledgeExpertAgent
 from app.agents.skill_manager import SkillManager
 from app.agents.schemas import TopologyInfo
@@ -21,48 +21,15 @@ from app.agents.langgraph import graph as graph_module
 class RealDiagnosisTests(unittest.IsolatedAsyncioTestCase):
     """测试不依赖云端模型、真实数据库或测试服务。"""
 
-    async def probe_with_transport(self, handler):
-        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        with patch("app.agents.http_probe.httpx.AsyncClient", return_value=client):
-            return await probe_test_web()
-
-    async def test_probe_healthy(self):
-        result = await self.probe_with_transport(lambda request: httpx.Response(200))
-        self.assertTrue(result["success"])
-        self.assertEqual(result["source"], "http_probe")
-        self.assertEqual(result["status_code"], 200)
-        self.assertIn("checked_at", result)
-
-    async def test_probe_http_error_and_redirect_are_not_success(self):
-        for status in (500, 302):
-            with self.subTest(status=status):
-                result = await self.probe_with_transport(lambda request: httpx.Response(status))
-                self.assertFalse(result["success"])
-                self.assertEqual(result["status_code"], status)
-
-    async def test_probe_connection_error_and_timeout(self):
-        for exception, expected in ((httpx.ConnectError, "connection_error"), (httpx.ReadTimeout, "timeout")):
-            def handler(request):
-                raise exception("测试异常", request=request)
-            result = await self.probe_with_transport(handler)
-            self.assertEqual(result["status"], expected)
-            self.assertEqual(result["source"], "http_probe")
-            self.assertIsNone(result["status_code"])
-
-    async def test_probe_blocks_other_targets_without_network(self):
-        with patch("app.agents.http_probe.httpx.AsyncClient") as client:
-            result = await probe_test_web("http://example.com/")
-            client.assert_not_called()
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["source"], "unavailable")
-
     async def test_trace_and_rca_real_mode_do_not_generate_mock(self):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            with patch.object(settings, "MOCK_ENABLED", False):
-                for method, path in (("GET", "/api/traces/search"), ("GET", "/api/traces/dependency"), ("GET", "/api/traces/example"), ("POST", "/api/traces/analyze"), ("POST", "/api/rca/analyze"), ("GET", "/api/rca/history")):
+            unavailable = HTTPException(503, detail={"code": "not_connected"})
+            with patch.object(settings, "MOCK_ENABLED", False), patch("app.api.tracing.read_traces", side_effect=unavailable), patch("app.api.tracing.read_trace", side_effect=unavailable), patch("app.api.tracing.generate_mock_traces") as mock:
+                for method, path in (("GET", "/api/traces/search"), ("GET", "/api/traces/dependency"), ("GET", "/api/traces/" + "a" * 32), ("POST", "/api/traces/analyze"), ("POST", "/api/rca/analyze"), ("GET", "/api/rca/history")):
                     response = await client.request(method, path, **({"json": {}} if method == "POST" else {}))
                     self.assertEqual(response.status_code, 503, path)
                     self.assertEqual(response.json()["detail"]["code"], "not_connected")
+                mock.assert_not_called()
 
     async def test_trace_and_rca_demo_mode_are_labeled(self):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -108,7 +75,7 @@ class RealDiagnosisTests(unittest.IsolatedAsyncioTestCase):
             result = await knowledge.query_rag(knowledge.RAGQueryRequest(query="测试"))
         self.assertEqual(result.source, "mock_data")
 
-    async def test_response_separates_actual_nodes_and_http_evidence(self):
+    async def test_response_records_actual_nodes_without_claiming_a_fix(self):
         result = {
             "visited_nodes": ["intent_parse", "knowledge_qa", "finalize"],
             "intent_data": {"entities": {}}, "diagnosis_result": None,
@@ -118,8 +85,6 @@ class RealDiagnosisTests(unittest.IsolatedAsyncioTestCase):
             response = await multi_agent.process_multi_agent_query(multi_agent.MultiAgentRequest(query="测试"), req=None)
         body = json.loads(response.body)
         self.assertFalse(body["warning_cleared"])
-        self.assertEqual(body["diagnosis_status"], "insufficient_evidence")
-        self.assertEqual(body["http_evidence"], [])
         self.assertIn("未执行知识查询", body["stages"]["knowledge_query"]["knowledge_report"])
         self.assertEqual(next(step for step in body["stage_progress"] if step["node"] == "react_agent")["status"], "wait")
         self.assertEqual(next(step for step in body["stage_progress"] if step["node"] == "knowledge_qa")["status"], "finish")
@@ -135,26 +100,15 @@ class RealDiagnosisTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(result["visited_nodes"], ["intent_parse", "knowledge_qa", "finalize"])
 
-    async def test_connection_failure_is_evidence_not_a_fix(self):
-        result = {
-            "visited_nodes": ["intent_parse", "react_agent", "finalize"],
-            "intent_data": {"entities": {}},
-            "execution_history": [{"tool": "probe_test_web", "result": {"source": "http_probe", "target": TEST_WEB_URL, "status": "connection_error", "success": False}}],
-        }
-        with patch.object(multi_agent._graph, "ainvoke", AsyncMock(return_value=result)):
-            response = await multi_agent.process_multi_agent_query(multi_agent.MultiAgentRequest(query="测试"), req=None)
-        body = json.loads(response.body)
-        self.assertEqual(body["diagnosis_status"], "evidence_available")
-        self.assertFalse(body["http_evidence"][0]["success"])
-        self.assertFalse(body["warning_cleared"])
-
-    def test_skill_and_restricted_tools_are_available(self):
+    def test_retired_probe_is_not_exposed_and_real_tools_remain(self):
         skills = SkillManager()
-        self.assertIn("test_web_skill", skills.search_relevant_skills("诊断本地测试服务 test-web", {}))
-        allowed = {"probe_test_web", "save_diagnosis_plan", "submit_diagnosis_result"}
-        tools = _convert_tool_registry_to_langchain(_tool_registry, allowed)
-        self.assertEqual({tool.name for tool in tools}, allowed)
-
+        self.assertNotIn("test_web_skill", skills.SKILL_REGISTRY)
+        self.assertNotIn("probe_test_web", _tool_registry.list_tools())
+        definitions = {item["function"]["name"] for item in _tool_registry.get_tools_for_llm()}
+        tools = {item.name for item in _convert_tool_registry_to_langchain(_tool_registry)}
+        self.assertEqual(tools, definitions)
+        self.assertNotIn("probe_test_web", tools)
+        self.assertTrue({"execute_command", "mcp_call", "analyze_trace"}.issubset(tools))
 
 if __name__ == "__main__":
     unittest.main()

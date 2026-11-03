@@ -110,8 +110,6 @@ const Diagnose = () => {
         saved_to: data.saved_to,
         data_mode: data.data_mode,
         data_sources: data.data_sources,
-        diagnosis_status: data.diagnosis_status,
-        http_evidence: data.http_evidence,
         stage_progress: data.stage_progress,
       });
       
@@ -168,7 +166,7 @@ const Diagnose = () => {
             showIcon
             style={{ marginBottom: 16 }}
             message={currentTask.data_mode === 'mock' ? '演示模式：可能包含模拟数据' : '真实模式：未接入或查询失败不会使用模拟数据补齐'}
-            description={currentTask.diagnosis_status === 'evidence_available' ? '已有 HTTP 探测证据，不代表已确认根因或完成修复。' : '尚无 HTTP 探测证据，模型建议不等于实际执行。'}
+            description="模型建议不等于实际执行；请根据工具执行记录核对证据，流程结束不代表故障已修复。"
           />
           <Steps
             size="small"
@@ -189,20 +187,6 @@ const Diagnose = () => {
           </Space>
         </Card>
       )}
-
-      {(currentTask?.http_evidence || []).map((evidence, index) => (
-        <section key={`${evidence.checked_at}-${index}`} style={{ marginBottom: 24 }}>
-          <Title level={5}>HTTP 探测原始结果 <Tag color={evidence.source === 'http_probe' ? 'green' : 'default'}>{evidence.source === 'http_probe' ? '真实探测' : '未探测'}</Tag></Title>
-          <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
-            <Descriptions.Item label="目标"><Text style={{ wordBreak: 'break-all' }}>{evidence.target}</Text></Descriptions.Item>
-            <Descriptions.Item label="检查时间"><Text style={{ wordBreak: 'break-all' }}>{evidence.checked_at}</Text></Descriptions.Item>
-            <Descriptions.Item label="HTTP 状态码">{evidence.status_code ?? '未收到响应'}</Descriptions.Item>
-            <Descriptions.Item label="耗时">{evidence.duration_ms} ms</Descriptions.Item>
-            <Descriptions.Item label="结果">{evidence.status}</Descriptions.Item>
-            {evidence.error && <Descriptions.Item label="错误">{evidence.error}</Descriptions.Item>}
-          </Descriptions>
-        </section>
-      ))}
 
       {currentTask && currentTask.status === 'completed' && (
         <>

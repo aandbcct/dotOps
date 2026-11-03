@@ -17,10 +17,6 @@ async def skill_match_node(state: AIOpsState) -> dict:
         query,
         intent_data,
     )
-    # 固定测试目标只使用专属排查步骤，避免其他运维技能扩大执行范围。
-    if "test_web_skill" in matched_skills:
-        matched_skills = ["test_web_skill"]
-
     logger.warning(f"[DEBUG skill_match] result={matched_skills}")
 
     skills_content = _skill_manager.get_relevant_skills_content(matched_skills)

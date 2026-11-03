@@ -27,12 +27,6 @@ class SkillManager:
     """
     
     SKILL_REGISTRY = {
-        "test_web_skill": {
-            "path": "diagnosis/test_web_skill.md",
-            "category": "diagnosis",
-            "description": "本地测试 Web 服务的只读 HTTP 健康探测",
-            "keywords": ["test-web", "dotops-test-web"],
-        },
         "debug_skill": {
             "path": "diagnosis/debug_skill.md",
             "category": "diagnosis",
@@ -546,12 +540,6 @@ class SkillManager:
     }
     
     WEIGHTED_KEYWORDS = {
-        "test_web_skill": {
-            "core": {"test-web": 30, "dotops-test-web": 30},
-            "symptom": {},
-            "component": {},
-            "alias": {},
-        },
         "debug_skill": {
             "core": {
                 "故障排查": 10, "故障诊断": 10, "排查": 8, "诊断": 8,

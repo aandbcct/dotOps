@@ -23,3 +23,8 @@ datasources:
     url: http://alertmanager:9093
     jsonData:
       implementation: prometheus
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100

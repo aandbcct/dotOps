@@ -47,7 +47,7 @@ const Tracing = () => {
     try {
       const result = await traceApi.getServiceDependency(lookback);
       setDependency(result);
-      setDataNotice(result.source === 'mock_data' ? '演示模式：当前服务依赖为模拟数据' : '');
+      setDataNotice(result.source === 'mock_data' ? '演示模式：当前服务依赖为模拟数据' : '依赖统计基于返回的链路样本，不代表全量业务流量。');
     } catch (error) {
       setDependency(null);
       setDataNotice('真实服务依赖尚未接入或查询失败，没有使用模拟数据补齐。');
@@ -70,7 +70,7 @@ const Tracing = () => {
     } else {
       fetchDependency();
     }
-  }, [lookback, errorOnly, slowOnly, activeTab]);
+  }, [lookback, errorOnly, slowOnly, activeTab, serviceName]);
 
   const getDurationColor = (duration: number) => {
     if (duration > 3000) return 'red';
@@ -253,7 +253,7 @@ const Tracing = () => {
         <Row gutter={16} align="middle">
           <Col span={6}>
             <Statistic
-              title="总链路数"
+              title="当前链路数"
               value={traces.length}
               prefix={<ApiOutlined />}
             />
@@ -269,7 +269,7 @@ const Tracing = () => {
           <Col span={6}>
             <Statistic
               title="服务数"
-              value={dependency?.total_services || 0}
+              value={activeTab === 'traces' ? new Set(traces.flatMap(trace => trace.services)).size : dependency?.total_services || 0}
             />
           </Col>
           <Col span={6} style={{ textAlign: 'right' }}>

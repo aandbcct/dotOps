@@ -153,6 +153,7 @@ class ObservabilityConfig(BaseModel):
             ),
             tempo=TempoConfig(
                 url=os.getenv("TEMPO_URL", "http://localhost:3200"),
+                query_url=os.getenv("TEMPO_QUERY_URL", os.getenv("TEMPO_URL", "http://localhost:3200")),
             ),
             opentelemetry=OpenTelemetryConfig(
                 endpoint=os.getenv("OTEL_ENDPOINT", "http://localhost:4317"),

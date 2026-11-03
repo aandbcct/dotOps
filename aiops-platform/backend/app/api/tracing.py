@@ -5,16 +5,19 @@
 """
 
 import logging
+import re
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta
 import random
 import uuid
 from app.core.mock_mode import require_mock_mode
+from app.core.config import settings
+from app.observability.trace_view import read_trace, read_traces, trace_info, trace_detail, dependency_view
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/traces", tags=["tracing"], dependencies=[Depends(require_mock_mode)])
+router = APIRouter(prefix="/api/traces", tags=["tracing"])
 
 
 class TraceSearchParams(BaseModel):
@@ -172,7 +175,7 @@ async def search_traces(
     error_only: bool = False,
     slow_only: bool = False,
     lookback: str = "1h",
-    limit: int = 50
+    limit: int = Query(50, ge=1, le=100)
 ):
     """
     搜索 Trace 列表
@@ -184,6 +187,9 @@ async def search_traces(
         lookback: 回溯时间
         limit: 返回数量限制
     """
+    if not settings.MOCK_ENABLED:
+        real_traces = await read_traces(service_name, error_only, slow_only, lookback, limit)
+        return {"total": len(real_traces), "source": "tempo", "traces": [trace_info(trace) for trace in real_traces], "lookback": lookback}
     try:
         traces = generate_mock_traces(
             service_name=service_name,
@@ -211,6 +217,8 @@ async def get_service_dependency(lookback: str = "24h"):
     Args:
         lookback: 回溯时间
     """
+    if not settings.MOCK_ENABLED:
+        return dependency_view(await read_traces(None, False, False, lookback, 100), lookback)
     try:
         dependency = generate_mock_dependency(lookback)
         dependency["source"] = "mock_data"
@@ -228,6 +236,10 @@ async def get_trace_by_id(trace_id: str):
     Args:
         trace_id: Trace ID
     """
+    if not settings.MOCK_ENABLED:
+        if not re.fullmatch(r"[0-9a-fA-F]{32}", trace_id):
+            raise HTTPException(422, detail="Trace ID 应为 32 位十六进制字符串")
+        return trace_detail(await read_trace(trace_id))
     try:
         trace = generate_mock_trace_detail(trace_id)
         trace["source"] = "mock_data"
@@ -237,7 +249,7 @@ async def get_trace_by_id(trace_id: str):
         raise HTTPException(status_code=404, detail=f"Trace 不存在: {str(e)}")
 
 
-@router.post("/analyze")
+@router.post("/analyze", dependencies=[Depends(require_mock_mode)])
 async def analyze_trace(params: TraceAnalysisParams):
     """
     分析 Trace

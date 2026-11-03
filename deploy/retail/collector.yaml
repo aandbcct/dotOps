@@ -1,0 +1,116 @@
+extensions:
+  file_storage:
+    directory: /var/lib/otelcol
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      global:
+        scrape_interval: 15s
+      scrape_configs:
+        - job_name: ui
+          metrics_path: /actuator/prometheus
+          static_configs:
+            - targets: ["ui:8080"]
+              labels:
+                service: ui
+                environment: dotops-lab
+        - job_name: catalog
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["catalog:8080"]
+              labels:
+                service: catalog
+                environment: dotops-lab
+        - job_name: cart
+          metrics_path: /actuator/prometheus
+          static_configs:
+            - targets: ["cart:8080"]
+              labels:
+                service: cart
+                environment: dotops-lab
+        - job_name: checkout
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["checkout:8080"]
+              labels:
+                service: checkout
+                environment: dotops-lab
+        - job_name: orders
+          metrics_path: /actuator/prometheus
+          static_configs:
+            - targets: ["orders:8080"]
+              labels:
+                service: orders
+                environment: dotops-lab
+        - job_name: ubuntu
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["node-exporter:9100"]
+              labels:
+                service: ubuntu
+                environment: dotops-lab
+  filelog:
+    include: [/hostlogs/*/*-json.log]
+    include_file_path: true
+    start_at: beginning
+    storage: file_storage
+    resource:
+      service.namespace: aws-retail
+      deployment.environment: dotops-lab
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.time
+          layout_type: gotime
+          layout: "2006-01-02T15:04:05.999999999Z07:00"
+      # 只采集带商城服务标签的日志，避免回收采集器自身的日志。
+      - type: filter
+        expr: 'attributes.attrs == nil'
+      - type: move
+        id: move-service
+        from: attributes.attrs["com.docker.compose.service"]
+        to: resource["service.name"]
+      - type: move
+        id: move-body
+        from: attributes.log
+        to: body
+processors:
+  transform/metric_help:
+    metric_statements:
+      - context: metric
+        statements:
+          # 各语言运行时对同名指标的 HELP 文本不同，统一说明以保证聚合导出合法。
+          - 'set(description, "Runtime metric collected from a retail service or host") where IsMatch(name, "^(go_|process_)")'
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 192
+    spike_limit_mib: 48
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+exporters:
+  otlphttp/windows:
+    endpoint: http://192.168.108.1:4318
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+service:
+  extensions: [file_storage]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/windows]
+    logs:
+      receivers: [filelog]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/windows]
+    metrics:
+      receivers: [prometheus]
+      processors: [memory_limiter, transform/metric_help, batch]
+      exporters: [prometheus]

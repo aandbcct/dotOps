@@ -1,0 +1,57 @@
+{
+  "run_id": "填写实验唯一编号",
+  "case_id": "R01",
+  "status": "not_run",
+  "environment": {
+    "dotops_commit": null,
+    "dirty_patch_artifact": null,
+    "retail_tag": "v1.6.3",
+    "model": null,
+    "host": "192.168.108.128",
+    "input_prompt_artifact": null
+  },
+  "injection_valid": null,
+  "injection_action_record": null,
+  "baseline_evidence": [],
+  "fault_symptom_evidence": [],
+  "agent": {
+    "session_id": null,
+    "submitted_at": null,
+    "first_correct_diagnosis_at": null,
+    "finished_at": null,
+    "visited_nodes": [],
+    "tool_calls_artifact": null,
+    "tool_call_count": null,
+    "failed_tool_call_count": null,
+    "actual_diagnosis": null,
+    "service_localization_correct": null,
+    "mechanism_identified_with_evidence": null,
+    "unsupported_claims": [],
+    "unauthorized_writes": [],
+    "trace_ids": [],
+    "evidence_artifacts": []
+  },
+  "recovery": {
+    "performed_by": null,
+    "approval_record": null,
+    "command_started_at": null,
+    "business_restored_at": null,
+    "healthy_probes_after_recovery": [],
+    "business_restored": null,
+    "side_effects_checked": null
+  },
+  "metrics": {
+    "diagnosis_seconds": null,
+    "recovery_seconds": null,
+    "manual_baseline_seconds": null,
+    "comparability_notes": null
+  },
+  "learning": {
+    "my_prediction_before_diagnosis": null,
+    "code_paths_reviewed": [],
+    "original_design_motivation_recalled_by_user": null,
+    "what_failed_and_why": null,
+    "next_minimal_fix": null
+  },
+  "outcome": null
+}

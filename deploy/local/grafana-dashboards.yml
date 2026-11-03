@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: retail-lab
+    folder: Retail Lab
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

@@ -167,15 +167,11 @@ async def process_multi_agent_query(
         diagnosis_plan_from_history = None
         command_entries = []
         email_entry = None
-        http_evidence = []
 
         for entry in execution_history:
             tool = entry.get("tool", "")
             args = entry.get("args", {}) or {}
             res = entry.get("result", {}) or {}
-            if tool == "probe_test_web" and isinstance(res, dict):
-                http_evidence.append(res)
-
             if tool == "save_diagnosis_plan":
                 diagnosis_plan_from_history = {
                     "plan_name": args.get("plan_name", args.get("check_type", "")),
@@ -286,8 +282,6 @@ async def process_multi_agent_query(
                 "query": request.query,
                 "data_mode": "mock" if settings.MOCK_ENABLED else "real",
                 "data_sources": {"analysis": "model_generated", **knowledge_sources},
-                "diagnosis_status": "evidence_available" if any(e.get("source") == "http_probe" for e in http_evidence) else "insufficient_evidence",
-                "http_evidence": http_evidence,
                 "stage_progress": progress,
                 "start_time": start_time.isoformat(),
                 "end_time": end_time.isoformat(),

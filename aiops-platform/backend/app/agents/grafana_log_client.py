@@ -5,6 +5,7 @@ Grafana Loki 日志查询客户端
 无需直接暴露 Loki 端口（3100），所有请求经过 Grafana 认证代理。
 """
 
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
@@ -182,7 +183,7 @@ class GrafanaLogClient:
 
         limit = min(max(limit, 1), 5000)
         now = datetime.now(timezone.utc)
-        start_dt = self._parse_time(start, now - timedelta(hours=1))
+        start_dt = self._parse_time(start, now) if start else now - timedelta(hours=1)
         end_dt = self._parse_time(end, now)
 
         try:
@@ -200,8 +201,8 @@ class GrafanaLogClient:
                         "maxLines": limit,
                     }
                 ],
-                "from": start_dt.isoformat(),
-                "to": end_dt.isoformat(),
+                "from": str(int(start_dt.timestamp() * 1000)),
+                "to": str(int(end_dt.timestamp() * 1000)),
             }
             logger.info(f"Querying Grafana Loki: {query} ({start} ~ {end})")
 
@@ -214,6 +215,8 @@ class GrafanaLogClient:
             # 解析 LabeledTimeValues 帧: fields=[labels, Time, Line, tsNs, labelTypes, id]
             results = []
             for ref_id, frame in data.get("results", {}).items():
+                if frame.get("error"):
+                    raise ValueError(frame["error"])
                 for series in frame.get("frames", []):
                     fields = series.get("schema", {}).get("fields", [])
                     values = series.get("data", {}).get("values", [])
@@ -331,7 +334,7 @@ class GrafanaLogClient:
             return {"success": False, "error": "Grafana is not enabled in config"}
 
         now = datetime.now(timezone.utc)
-        start_dt = self._parse_time(start, now - timedelta(hours=1))
+        start_dt = self._parse_time(start, now) if start else now - timedelta(hours=1)
         end_dt = self._parse_time(end, now)
 
         try:

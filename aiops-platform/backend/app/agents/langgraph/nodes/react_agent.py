@@ -44,12 +44,10 @@ def _build_param_model(name: str, params_schema: dict):
     return create_model(f"{name}Schema", **fields)
 
 
-def _convert_tool_registry_to_langchain(registry: ToolRegistry, allowed_tools: set[str] | None = None) -> list:
+def _convert_tool_registry_to_langchain(registry: ToolRegistry) -> list:
     lc_tools = []
 
     for tool_def in registry.get_tools_for_llm():
-        if allowed_tools is not None and tool_def["function"]["name"] not in allowed_tools:
-            continue
         func_info = tool_def["function"]
         tool_name = func_info["name"]
         description = func_info["description"]
@@ -110,7 +108,6 @@ SYSTEM_PROMPT = """你是一个智能运维诊断专家。你需要根据用户�
 必须调用 `submit_diagnosis_result` 工具提交诊断结果。这是唯一正确的结束方式。
 
 ## 安全规则
-- 本地测试服务 test-web 必须遵循 test_web_skill，只调用 probe_test_web 取证；不得改用 Shell 或 SSH。
 - 没有真实工具证据不得声称已检测、已修复或已确认根因；模拟数据只能标为演示。
 - 危险命令绝对禁止执行 (rm -rf, shutdown, reboot, dd, mkfs 等)
 - 中风险操作需要调用 `ask_user_confirmation` 获取用户确认（会自动发送审批邮件）
@@ -152,12 +149,13 @@ def _build_user_message(state: AIOpsState) -> str:
     return user_msg
 
 
-_react_agents = {}
+_react_agent = None
 
 
-def _get_react_agent(test_web_only: bool = False):
-    if test_web_only in _react_agents:
-        return _react_agents[test_web_only]
+def _get_react_agent():
+    global _react_agent
+    if _react_agent is not None:
+        return _react_agent
 
     llm = ChatOpenAI(
         model=settings.OPENAI_MODEL,
@@ -166,22 +164,19 @@ def _get_react_agent(test_web_only: bool = False):
         temperature=0.2,
     )
 
-    # 本地测试场景不向模型暴露命令执行、SSH 或审批工具。
-    allowed_tools = {"probe_test_web", "save_diagnosis_plan", "submit_diagnosis_result"} if test_web_only else None
-    lc_tools = _convert_tool_registry_to_langchain(_tool_registry, allowed_tools)
+    lc_tools = _convert_tool_registry_to_langchain(_tool_registry)
 
     agent = create_react_agent(
         llm,
         lc_tools,
     )
 
-    _react_agents[test_web_only] = agent
+    _react_agent = agent
     return agent
 
 
 async def react_agent_node(state: AIOpsState) -> dict:
-    test_web_only = "test_web_skill" in state.get("matched_skills", [])
-    agent = _get_react_agent(test_web_only)
+    agent = _get_react_agent()
 
     user_message = _build_user_message(state)
     # 只提取 state 中的 system 消息，避免 assistant 消息混在 system 和 user 之间
@@ -196,7 +191,7 @@ async def react_agent_node(state: AIOpsState) -> dict:
 
     result = await agent.ainvoke(
         {"messages": input_messages},
-        config={"recursion_limit": 32 if test_web_only else 200},
+        config={"recursion_limit": 200},
     )
 
     last_message = result["messages"][-1]

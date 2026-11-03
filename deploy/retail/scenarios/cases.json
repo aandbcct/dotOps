@@ -1,0 +1,591 @@
+{
+  "version": 1,
+  "updated": "2026-11-02",
+  "purpose": "通过亲自运维、源码回看和可复现实验积累项目理解与简历证据",
+  "environment": {
+    "host": "192.168.108.128",
+    "ssh_user": "dotops",
+    "compose_dir": "/opt/retail-store",
+    "compose_project": "retail-sample",
+    "upstream_tag": "v1.6.3",
+    "upstream_commit": "d7a380b843e0759e58754f74188ea18252a51415",
+    "retention_hours": 48
+  },
+  "state_definitions": {
+    "prepared_not_executed": "操作路径及当前前提已检查，不代表注入/诊断已成功",
+    "source_verified_needs_workflow": "源码有机制，业务触发和证据步骤待完善",
+    "blocked_by_prerequisites": "缺少观测、负载或精确注入方法"
+  },
+  "cases": [
+    {
+      "id": "R00",
+      "title": "健康业务基线",
+      "phase": "first",
+      "target": "catalog",
+      "fault": "none",
+      "prompt": "请检查 Ubuntu 192.168.108.128 上商城商品查询是否正常，SSH 用户 dotops。请只读检查，并给出证据；证据不足时说明缺口。",
+      "truth": "没有主动故障，先验证环境健康。",
+      "business": [
+        "GET /catalog 页面",
+        "内部 GET http://catalog:8080/catalog/products"
+      ],
+      "evidence": [
+        "商品响应有预置商品而非仅 HTTP 200",
+        "catalog、catalog-db 运行状态",
+        "业务 Trace ID 与时间"
+      ],
+      "pass": [
+        "不得凭空报告故障",
+        "HTTP、业务内容及证据一致"
+      ],
+      "recover": "无恢复操作",
+      "skills": [
+        "debug_skill",
+        "otel_trace_skill"
+      ],
+      "commands": null,
+      "readiness": "prepared_not_executed",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "gaps": [
+        "尚未实测故障业务表现、Agent 诊断和恢复闭环"
+      ]
+    },
+    {
+      "id": "R01",
+      "title": "商品接口持续返回 503",
+      "phase": "first",
+      "target": "catalog",
+      "fault": "native_http_status",
+      "prompt": "商城商品页异常，请排查 192.168.108.128 上的 catalog 服务，SSH 用户 dotops。先只读诊断，说明证据和建议，不执行修复。",
+      "truth": "catalog 内置故障开关使 /catalog/* 返回 503；不是数据库停止。",
+      "business": [
+        "GET /catalog 页面",
+        "内部 GET /catalog/products 返回 503"
+      ],
+      "evidence": [
+        "直接商品 API 的 HTTP 状态",
+        "catalog /chaos/status 中 error_status.enabled/code",
+        "UI 下游请求错误、时间与 Trace",
+        "数据库及容器状态"
+      ],
+      "pass": [
+        "定位到 catalog 返回错误",
+        "只有读取开关后才可声称故障注入已开启",
+        "不得无证据归因数据库或网络"
+      ],
+      "recover": "DELETE http://catalog:8080/chaos/status",
+      "skills": [
+        "debug_skill",
+        "log_analysis_skill",
+        "otel_trace_skill"
+      ],
+      "commands": {
+        "inject": "docker compose exec -T ui curl -fsS --max-time 10 -X POST http://catalog:8080/chaos/status/503",
+        "recover": "docker compose exec -T ui curl -fsS --max-time 10 -X DELETE http://catalog:8080/chaos/status"
+      },
+      "readiness": "prepared_not_executed",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "gaps": [
+        "尚未实测故障业务表现、Agent 诊断和恢复闭环"
+      ]
+    },
+    {
+      "id": "R02",
+      "title": "商品接口人为增加 1000ms 延迟",
+      "phase": "first",
+      "target": "catalog",
+      "fault": "native_latency",
+      "prompt": "商城商品查询明显变慢，请排查 192.168.108.128 上的 catalog 服务，SSH 用户 dotops。只读检查，区分已确认事实和推测。",
+      "truth": "catalog 内置延迟开关在业务处理前休眠 1000ms；不是真实慢 SQL。",
+      "business": [
+        "GET /catalog 页面",
+        "内部 GET /catalog/products，和同条件基线比较"
+      ],
+      "evidence": [
+        "同一路径注入前后客户端耗时",
+        "catalog /chaos/status latency.enabled/value",
+        "UI 下游 HTTP client Span",
+        "SQL Span 与完整请求耗时对比"
+      ],
+      "pass": [
+        "识别 catalog 请求变慢",
+        "不能将人工 sleep 写成慢 SQL",
+        "允许因证据不足只定位到服务层，不冒充精确机制"
+      ],
+      "recover": "DELETE http://catalog:8080/chaos/latency",
+      "skills": [
+        "debug_skill",
+        "otel_trace_skill",
+        "performance_tuning_skill"
+      ],
+      "commands": {
+        "inject": "docker compose exec -T ui curl -fsS --max-time 10 -X POST http://catalog:8080/chaos/latency/1000",
+        "recover": "docker compose exec -T ui curl -fsS --max-time 10 -X DELETE http://catalog:8080/chaos/latency"
+      },
+      "readiness": "prepared_not_executed",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "gaps": [
+        "尚未实测故障业务表现、Agent 诊断和恢复闭环"
+      ]
+    },
+    {
+      "id": "R03",
+      "title": "健康检查失败但商品业务仍可用",
+      "phase": "first",
+      "target": "catalog",
+      "fault": "native_health",
+      "prompt": "catalog 的健康状态异常，请检查 192.168.108.128，SSH 用户 dotops。同时核对商品业务是否受影响，先不要重启服务。",
+      "truth": "/chaos/health 只使 /health 失败，业务接口并未被该开关阻断。",
+      "business": [
+        "内部 GET /health 预期 503",
+        "内部 GET /catalog/products 预期仍正常",
+        "GET /catalog 页面核对内容"
+      ],
+      "evidence": [
+        "健康接口与商品 API 分别取证",
+        "等待 Docker 健康探测后的状态",
+        "Prometheus up 仅代表抓取状态"
+      ],
+      "pass": [
+        "区分健康探测异常和业务不可用",
+        "不得声称 Docker 自动重启 unhealthy 容器",
+        "不得以 up=1 推断业务正常"
+      ],
+      "recover": "DELETE http://catalog:8080/chaos/health",
+      "skills": [
+        "debug_skill",
+        "prometheus_skill"
+      ],
+      "commands": {
+        "inject": "docker compose exec -T ui curl -fsS --max-time 10 -X POST http://catalog:8080/chaos/health",
+        "recover": "docker compose exec -T ui curl -fsS --max-time 10 -X DELETE http://catalog:8080/chaos/health"
+      },
+      "readiness": "prepared_not_executed",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "gaps": [
+        "尚未实测故障业务表现、Agent 诊断和恢复闭环"
+      ]
+    },
+    {
+      "id": "R04",
+      "title": "商品服务容器被人工停止",
+      "phase": "first",
+      "target": "catalog",
+      "fault": "container_stop",
+      "prompt": "商城商品页打不开，请检查 192.168.108.128 上的 catalog 服务，SSH 用户 dotops。先只读诊断，提供实际执行证据。",
+      "truth": "docker compose stop catalog 人工停止商品容器；数据库仍运行。",
+      "business": [
+        "GET /catalog 页面",
+        "从 ui 容器访问 catalog，记录连接失败或代理错误"
+      ],
+      "evidence": [
+        "docker compose ps --all / docker ps -a",
+        "catalog 停止状态和对应日志时间",
+        "指标抓取失败与上游错误 Trace"
+      ],
+      "pass": [
+        "识别 catalog 容器未运行",
+        "不能仅凭旧日志判断当前状态",
+        "不把数据库正常运行遗漏为检查项"
+      ],
+      "recover": "docker compose start catalog",
+      "skills": [
+        "debug_skill",
+        "connectivity_skill",
+        "otel_trace_skill"
+      ],
+      "commands": {
+        "inject": "docker compose stop catalog",
+        "recover": "docker compose start catalog"
+      },
+      "readiness": "prepared_not_executed",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "gaps": [
+        "尚未实测故障业务表现、Agent 诊断和恢复闭环"
+      ]
+    },
+    {
+      "id": "R05",
+      "title": "商品 MariaDB 被人工停止",
+      "phase": "first",
+      "target": "catalog-db",
+      "fault": "database_stop",
+      "prompt": "商城商品查询失败，请排查 192.168.108.128 上的 catalog 服务及其依赖，SSH 用户 dotops。只读检查，不执行修复。",
+      "truth": "catalog-db 被停止，catalog 查询无法访问 MariaDB；与 R01 应区分。",
+      "business": [
+        "GET /catalog 页面",
+        "内部 GET /catalog/products，记录状态和内容"
+      ],
+      "evidence": [
+        "catalog-db 当前停止状态",
+        "catalog 数据库连接错误及时间",
+        "商品请求 SQL/连接错误 Trace，若缺失明确记录",
+        "catalog 自身进程与抓取状态"
+      ],
+      "pass": [
+        "定位至 catalog → catalog-db 数据库不可达",
+        "不能仅以 catalog up=1 排除故障",
+        "不能将断连表述成锁等待或慢查询"
+      ],
+      "recover": "docker compose start catalog-db",
+      "skills": [
+        "debug_skill",
+        "connectivity_skill",
+        "log_analysis_skill",
+        "otel_trace_skill"
+      ],
+      "commands": {
+        "inject": "docker compose stop catalog-db",
+        "recover": "docker compose start catalog-db"
+      },
+      "readiness": "prepared_not_executed",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "gaps": [
+        "尚未实测故障业务表现、Agent 诊断和恢复闭环"
+      ]
+    },
+    {
+      "id": "R06",
+      "title": "购物车业务返回 503",
+      "phase": "next",
+      "target": "cart",
+      "fault": "native_http_status",
+      "truth": "POST cart:8080/chaos/status/503，DELETE /chaos/status 恢复。仅源码核对，未注入。",
+      "business": [
+        "同一 cookie 会话添加商品并打开 /cart"
+      ],
+      "evidence": [
+        "/carts API 错误",
+        "UI 下游 Span",
+        "购物车会话与商品 ID"
+      ],
+      "pass": [
+        "定位购物车服务错误，不把商品服务当根因"
+      ],
+      "recover": "DELETE http://cart:8080/chaos/status",
+      "skills": [
+        "debug_skill",
+        "otel_trace_skill"
+      ],
+      "gaps": [
+        "需要将现有完整下单脚本拆成购物车单步，记录 cookie 和错误内容",
+        "Java 服务没有 GET /chaos/status；405 不是状态查询成功"
+      ],
+      "prompt": "请排查 192.168.108.128 上的 cart 相关业务异常，SSH 用户 dotops。先只读检查，引用真实证据，不执行修复。",
+      "readiness": "source_verified_needs_workflow",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "commands": null
+    },
+    {
+      "id": "R07",
+      "title": "结算服务人为延迟",
+      "phase": "next",
+      "target": "checkout",
+      "fault": "native_latency",
+      "truth": "POST checkout:8080/chaos/latency/1000，DELETE /chaos/latency 恢复。状态 GET 已实查关闭，变更未执行。",
+      "business": [
+        "先添加商品，再打开 /checkout"
+      ],
+      "evidence": [
+        "checkout 客户端 Span",
+        "Redis 与 checkout 请求耗时区分"
+      ],
+      "pass": [
+        "定位结算服务延迟，不无证据归因 Redis"
+      ],
+      "recover": "DELETE http://checkout:8080/chaos/latency",
+      "skills": [
+        "debug_skill",
+        "otel_trace_skill"
+      ],
+      "gaps": [
+        "需要固定结算会话和业务触发步骤",
+        "checkout 原生指标主要为进程指标"
+      ],
+      "prompt": "请排查 192.168.108.128 上的 checkout 相关业务异常，SSH 用户 dotops。先只读检查，引用真实证据，不执行修复。",
+      "readiness": "source_verified_needs_workflow",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "commands": null
+    },
+    {
+      "id": "R08",
+      "title": "订单创建接口返回 503",
+      "phase": "next",
+      "target": "orders",
+      "fault": "native_http_status",
+      "truth": "POST orders:8080/chaos/status/503，DELETE /chaos/status 恢复。仅源码核对，未注入。",
+      "business": [
+        "完整购物车→配送→提交测试订单"
+      ],
+      "evidence": [
+        "checkout → orders 请求错误",
+        "订单创建前后数据库行数",
+        "同一会话请求与 Trace ID"
+      ],
+      "pass": [
+        "定位订单服务错误",
+        "不得将支付确认页 HTTP 200 自动视为下单成功"
+      ],
+      "recover": "DELETE http://orders:8080/chaos/status",
+      "skills": [
+        "debug_skill",
+        "otel_trace_skill"
+      ],
+      "gaps": [
+        "需要保存失败请求 Trace ID；现有 smoke-test 成功后才写出映射",
+        "副作用需单独核对，禁止盲目重试创建订单"
+      ],
+      "prompt": "请排查 192.168.108.128 上的 orders 相关业务异常，SSH 用户 dotops。先只读检查，引用真实证据，不执行修复。",
+      "readiness": "source_verified_needs_workflow",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "commands": null
+    },
+    {
+      "id": "R09",
+      "title": "结算 Redis 不可达",
+      "phase": "next",
+      "target": "checkout-redis",
+      "fault": "database_stop",
+      "truth": "停止 checkout-redis，恢复 start；未执行。",
+      "business": [
+        "带购物车会话进入结算并推进步骤"
+      ],
+      "evidence": [
+        "Redis 停止状态",
+        "checkout 连接错误",
+        "失败业务内容与 Redis Span"
+      ],
+      "pass": [
+        "区分结算业务故障和 UI 故障"
+      ],
+      "recover": "docker compose start checkout-redis",
+      "skills": [
+        "redis_skill",
+        "debug_skill",
+        "otel_trace_skill"
+      ],
+      "gaps": [
+        "Redis 专用指标未接入，但 SSH/日志可先尝试连接诊断",
+        "需实测应用异常处理和恢复行为"
+      ],
+      "prompt": "请排查 192.168.108.128 上的 checkout-redis 相关业务异常，SSH 用户 dotops。先只读检查，引用真实证据，不执行修复。",
+      "readiness": "source_verified_needs_workflow",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "commands": null
+    },
+    {
+      "id": "R10",
+      "title": "订单 PostgreSQL 不可达",
+      "phase": "next",
+      "target": "orders-db",
+      "fault": "database_stop",
+      "truth": "停止 orders-db，恢复 start；未执行。",
+      "business": [
+        "完整流程提交测试订单"
+      ],
+      "evidence": [
+        "数据库停止状态",
+        "orders 连接异常和 Hikari 状态",
+        "订单是否落库"
+      ],
+      "pass": [
+        "定位订单数据库不可达",
+        "验证没有误报下单成功或重复订单"
+      ],
+      "recover": "docker compose start orders-db",
+      "skills": [
+        "postgresql_skill",
+        "debug_skill",
+        "otel_trace_skill"
+      ],
+      "gaps": [
+        "需实测失败响应与恢复后的数据库写入",
+        "数据库内部 exporter 未接入"
+      ],
+      "prompt": "请排查 192.168.108.128 上的 orders-db 相关业务异常，SSH 用户 dotops。先只读检查，引用真实证据，不执行修复。",
+      "readiness": "source_verified_needs_workflow",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "commands": null
+    },
+    {
+      "id": "R11",
+      "title": "UI CPU 升高",
+      "phase": "deferred",
+      "target": "ui",
+      "fault": "native_cpu_stress",
+      "truth": "官方 GET /utility/stress/{iterations} 执行计算，不保证一次调用造成持续 CPU 高。",
+      "business": [
+        "限定负载同时采样商品或页面请求"
+      ],
+      "evidence": [
+        "node CPU",
+        "docker stats ui",
+        "延迟基线与负载时间"
+      ],
+      "pass": [
+        "区分主机高 CPU 和 UI 进程占用",
+        "没有观测到目标负载则注入无效"
+      ],
+      "recover": "停止发压，等待当前计算结束；必要时按单独批准范围重启 UI",
+      "skills": [
+        "cpu_anomaly_skill",
+        "system_load_skill"
+      ],
+      "gaps": [
+        "需要按本机资源标定 iterations、并发和时长",
+        "目前无容器级时序 exporter，docker stats 可即时取证",
+        "不在本轮调用 stress/panic"
+      ],
+      "prompt": "请排查 192.168.108.128 上的 ui 相关业务异常，SSH 用户 dotops。先只读检查，引用真实证据，不执行修复。",
+      "readiness": "blocked_by_prerequisites",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "commands": null
+    },
+    {
+      "id": "R12",
+      "title": "真实数据库锁等待",
+      "phase": "deferred",
+      "target": "catalog-db",
+      "fault": "database_lock",
+      "truth": "待设计保持事务并竞争同一数据的双连接实验；不能用 sleep 代替。",
+      "business": [
+        "命中被锁记录的真实应用操作"
+      ],
+      "evidence": [
+        "等待与阻塞事务对应关系",
+        "锁持有连接",
+        "同一请求 Trace",
+        "恢复后事务状态"
+      ],
+      "pass": [
+        "识别阻塞者和等待者且引用真实数据库证据"
+      ],
+      "recover": "结束实验事务并核对业务数据；具体 SQL 尚未制定",
+      "skills": [
+        "mysql_deadlock_skill",
+        "debug_skill"
+      ],
+      "gaps": [
+        "需确定商品只读路径是否实际等待该锁；普通一致性读不一定等行锁",
+        "数据库内部锁观测、实验会话、数据恢复步骤未准备"
+      ],
+      "prompt": "请排查 192.168.108.128 上的 catalog-db 相关业务异常，SSH 用户 dotops。先只读检查，引用真实证据，不执行修复。",
+      "readiness": "blocked_by_prerequisites",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "commands": null
+    },
+    {
+      "id": "R13",
+      "title": "真实慢 SQL",
+      "phase": "deferred",
+      "target": "catalog-db",
+      "fault": "database_slow_sql",
+      "truth": "待设计真实应用命中的慢 SQL；不等于 /chaos/latency。",
+      "business": [
+        "固定数据规模下的真实商品查询"
+      ],
+      "evidence": [
+        "慢查询记录",
+        "执行计划",
+        "应用 SQL Span",
+        "同条件基线"
+      ],
+      "pass": [
+        "定位具体 SQL 和原因，收益只能在同条件前后对比后报告"
+      ],
+      "recover": "恢复查询/索引/数据变更，具体方法待设计",
+      "skills": [
+        "mysql_slow_query_skill"
+      ],
+      "gaps": [
+        "目前仅 12 个商品，不能凭此声称存在大数据慢查询",
+        "需要慢查询采集、数据构造和可逆方案"
+      ],
+      "prompt": "请排查 192.168.108.128 上的 catalog-db 相关业务异常，SSH 用户 dotops。先只读检查，引用真实证据，不执行修复。",
+      "readiness": "blocked_by_prerequisites",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "commands": null
+    },
+    {
+      "id": "R14",
+      "title": "并发流量下单次请求精准排障",
+      "phase": "deferred",
+      "target": "cross-service",
+      "fault": "concurrent_single_request",
+      "truth": "待设计并发正常流量中可识别的目标失败请求。原生 chaos 开关是服务范围，不是单请求开关。",
+      "business": [
+        "并发商品/购物车/订单流中的目标请求"
+      ],
+      "evidence": [
+        "目标 Trace ID",
+        "按 Trace ID 关联的各服务日志",
+        "目标订单/会话标识",
+        "背景正常请求"
+      ],
+      "pass": [
+        "证据准确属于目标请求，不能误关联其他会话日志"
+      ],
+      "recover": "停止发压并清除实验故障；核对测试订单",
+      "skills": [
+        "otel_trace_skill",
+        "log_analysis_skill"
+      ],
+      "gaps": [
+        "完整日志 Trace ID 关联未接通",
+        "需请求选择性故障或独立实例隔离方案",
+        "先标定资源容量，再决定并发；官方 load-generator 并非已部署能力"
+      ],
+      "prompt": "请排查 192.168.108.128 上的 cross-service 相关业务异常，SSH 用户 dotops。先只读检查，引用真实证据，不执行修复。",
+      "readiness": "blocked_by_prerequisites",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "commands": null
+    },
+    {
+      "id": "R15",
+      "title": "服务间网络隔离",
+      "phase": "deferred",
+      "target": "catalog-to-db",
+      "fault": "network_partition",
+      "truth": "待设计仅隔离 catalog 到 catalog-db 的连接，不切断 SSH 和观测链路。",
+      "business": [
+        "商品查询失败，数据库进程仍正常"
+      ],
+      "evidence": [
+        "双方容器状态",
+        "目标方向网络连通性",
+        "应用连接错误"
+      ],
+      "pass": [
+        "区分容器停止和网络不可达"
+      ],
+      "recover": "撤销精确实验规则并实测恢复；命令尚未制定",
+      "skills": [
+        "connectivity_skill",
+        "debug_skill"
+      ],
+      "gaps": [
+        "需独立网络规则、超时与回滚方案；不直接套用 AWS FIS/ECS 教程"
+      ],
+      "prompt": "请排查 192.168.108.128 上的 catalog-to-db 相关业务异常，SSH 用户 dotops。先只读检查，引用真实证据，不执行修复。",
+      "readiness": "blocked_by_prerequisites",
+      "execution_status": "not_run",
+      "diagnosis_verified": false,
+      "commands": null
+    }
+  ]
+}

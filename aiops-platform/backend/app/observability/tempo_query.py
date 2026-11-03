@@ -11,9 +11,12 @@ Tempo Query Client - Tempo 分布式追踪查询与分析
 """
 
 import asyncio
+import base64
+import json
 import logging
+import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,6 +31,18 @@ from .config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _hex_id(value: str, size: int) -> str:
+    """将 OTLP JSON 的 Base64 标识转换为前端和 Tempo 查询使用的十六进制标识。"""
+    if not value:
+        return ""
+    if re.fullmatch(rf"[0-9a-fA-F]{{{size * 2}}}", value):
+        return value.lower()
+    decoded = base64.b64decode(value, validate=True)
+    if len(decoded) != size:
+        raise ValueError("链路标识长度不正确")
+    return decoded.hex()
 
 
 class SpanKind(str, Enum):
@@ -362,6 +377,7 @@ class TempoQueryClient:
         max_duration: Optional[str] = None,
         lookback: Optional[str] = None,
         limit: int = 20,
+        query: Optional[str] = None,
     ) -> SearchResult:
         """
         搜索 Traces
@@ -381,17 +397,25 @@ class TempoQueryClient:
         client = self._get_client()
         lookback = lookback or self.default_lookback
         
+        match = re.fullmatch(r"([1-9][0-9]*)([smhd])", lookback)
+        if not match:
+            raise ValueError("回看时间应为正整数和 s、m、h 或 d")
+        seconds = int(match[1]) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[match[2]]
+        now = datetime.now(timezone.utc)
         params: Dict[str, Any] = {
             "limit": limit,
-            "start": f"-{lookback}",
+            "start": int((now - timedelta(seconds=seconds)).timestamp()),
+            "end": int(now.timestamp()),
         }
         
         if tags:
-            for key, value in tags.items():
-                params[f"tags"] = f"{key}={value}"
+            params["tags"] = " ".join(f"{key}={json.dumps(value)}" for key, value in tags.items())
         
         if service_name:
-            params["tags"] = params.get("tags", "") + f" service.name={service_name}"
+            params["tags"] = (params.get("tags", "") + f" service.name={json.dumps(service_name)}").strip()
+        if query:
+            params.pop("tags", None)
+            params["q"] = query
         
         if span_name:
             params["spanNameFilter"] = span_name
@@ -439,12 +463,12 @@ class TempoQueryClient:
         Returns:
             包含错误的 Trace 列表
         """
-        tags = {"error": "true"}
+        clauses = ["status = error"]
         if service_name:
-            tags["service.name"] = service_name
+            clauses.append(f"resource.service.name = {json.dumps(service_name)}")
         
         return await self.search_traces(
-            tags=tags,
+            query="{ " + " && ".join(clauses) + " }",
             lookback=lookback,
             limit=limit,
         )
@@ -485,7 +509,7 @@ class TempoQueryClient:
         Returns:
             解析后的 Trace 对象
         """
-        batches = data.get("batches", [])
+        batches = data.get("batches", data.get("resourceSpans", []))
         if not batches:
             return None
         
@@ -493,7 +517,8 @@ class TempoQueryClient:
         trace_id = ""
         
         for batch in batches:
-            resource_spans = batch.get("resourceSpans", [])
+            # Tempo 的 batches 本身就是资源分组，兼容原有包装结构。
+            resource_spans = batch.get("resourceSpans", [batch])
             
             for resource_span in resource_spans:
                 resource = resource_span.get("resource", {})
@@ -511,7 +536,7 @@ class TempoQueryClient:
                     
                     for span_data in spans_data:
                         if not trace_id:
-                            trace_id = span_data.get("traceId", "")
+                            trace_id = _hex_id(span_data.get("traceId", ""), 16)
                         
                         span = self._parse_span(span_data, service_name, resource_attrs)
                         if span:
@@ -520,7 +545,8 @@ class TempoQueryClient:
         if not all_spans:
             return None
         
-        root_spans = [s for s in all_spans if not s.parent_span_id]
+        span_ids = {s.span_id for s in all_spans}
+        root_spans = [s for s in all_spans if not s.parent_span_id or s.parent_span_id not in span_ids]
         
         return Trace(
             trace_id=trace_id,
@@ -539,11 +565,12 @@ class TempoQueryClient:
             start_time_ns = span_data.get("startTimeUnixNano", "0")
             end_time_ns = span_data.get("endTimeUnixNano", "0")
             
-            start_time = datetime.fromtimestamp(int(start_time_ns) / 1e9) if start_time_ns else None
-            end_time = datetime.fromtimestamp(int(end_time_ns) / 1e9) if end_time_ns and int(end_time_ns) > 0 else None
+            start_time = datetime.fromtimestamp(int(start_time_ns) / 1e9, timezone.utc) if start_time_ns else None
+            end_time = datetime.fromtimestamp(int(end_time_ns) / 1e9, timezone.utc) if end_time_ns and int(end_time_ns) > 0 else None
             
             status = span_data.get("status", {})
-            status_code_str = status.get("code", "STATUS_CODE_UNSET").replace("STATUS_CODE_", "")
+            raw_status = status.get("code", "STATUS_CODE_UNSET")
+            status_code_str = {0: "UNSET", 1: "OK", 2: "ERROR"}.get(raw_status, str(raw_status).replace("STATUS_CODE_", ""))
             
             attributes = {}
             for attr in span_data.get("attributes", []):
@@ -566,7 +593,7 @@ class TempoQueryClient:
                         event_attrs[attr["key"]] = attr_value["stringValue"]
                 
                 event_time_unix_nano = event.get("timeUnixNano", "0")
-                event_time = datetime.fromtimestamp(int(event_time_unix_nano) / 1e9) if event_time_unix_nano else None
+                event_time = datetime.fromtimestamp(int(event_time_unix_nano) / 1e9, timezone.utc) if event_time_unix_nano else None
                 
                 events.append(SpanEvent(
                     name=event.get("name", ""),
@@ -583,9 +610,9 @@ class TempoQueryClient:
             }
             
             return Span(
-                trace_id=span_data.get("traceId", ""),
-                span_id=span_data.get("spanId", ""),
-                parent_span_id=span_data.get("parentSpanId"),
+                trace_id=_hex_id(span_data.get("traceId", ""), 16),
+                span_id=_hex_id(span_data.get("spanId", ""), 8),
+                parent_span_id=_hex_id(span_data.get("parentSpanId", ""), 8) or None,
                 operation_name=span_data.get("name", "unknown"),
                 kind=kind_map.get(span_data.get("kind", "SPAN_KIND_INTERNAL"), SpanKind.INTERNAL),
                 start_time=start_time or datetime.now(),

@@ -1,0 +1,210 @@
+{
+  "services": {
+    "ui": {
+      "environment": {
+        "OTEL_SDK_DISABLED": "false",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://retail-collector:4318",
+        "OTEL_METRICS_EXPORTER": "none",
+        "OTEL_LOGS_EXPORTER": "none",
+        "OTEL_PROPAGATORS": "tracecontext,baggage",
+        "OTEL_RESOURCE_PROVIDERS_AWS_ENABLED": "false",
+        "OTEL_BSP_SCHEDULE_DELAY": "1000",
+        "OTEL_SERVICE_NAME": "ui",
+        "OTEL_RESOURCE_ATTRIBUTES": "service.namespace=aws-retail,deployment.environment=dotops-lab",
+        "OTEL_JAVA_GLOBAL_AUTOCONFIGURE_ENABLED": "true"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3",
+          "labels": "com.docker.compose.service"
+        }
+      }
+    },
+    "catalog": {
+      "environment": {
+        "OTEL_SDK_DISABLED": "false",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://retail-collector:4318",
+        "OTEL_METRICS_EXPORTER": "none",
+        "OTEL_LOGS_EXPORTER": "none",
+        "OTEL_PROPAGATORS": "tracecontext,baggage",
+        "OTEL_RESOURCE_PROVIDERS_AWS_ENABLED": "false",
+        "OTEL_BSP_SCHEDULE_DELAY": "1000",
+        "OTEL_SERVICE_NAME": "catalog",
+        "OTEL_RESOURCE_ATTRIBUTES": "service.namespace=aws-retail,deployment.environment=dotops-lab"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3",
+          "labels": "com.docker.compose.service"
+        }
+      }
+    },
+    "cart": {
+      "environment": {
+        "OTEL_SDK_DISABLED": "false",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://retail-collector:4318",
+        "OTEL_METRICS_EXPORTER": "none",
+        "OTEL_LOGS_EXPORTER": "none",
+        "OTEL_PROPAGATORS": "tracecontext,baggage",
+        "OTEL_RESOURCE_PROVIDERS_AWS_ENABLED": "false",
+        "OTEL_BSP_SCHEDULE_DELAY": "1000",
+        "OTEL_SERVICE_NAME": "cart",
+        "OTEL_RESOURCE_ATTRIBUTES": "service.namespace=aws-retail,deployment.environment=dotops-lab",
+        "OTEL_JAVA_GLOBAL_AUTOCONFIGURE_ENABLED": "true"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3",
+          "labels": "com.docker.compose.service"
+        }
+      }
+    },
+    "checkout": {
+      "environment": {
+        "OTEL_SDK_DISABLED": "false",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://retail-collector:4318",
+        "OTEL_METRICS_EXPORTER": "none",
+        "OTEL_LOGS_EXPORTER": "none",
+        "OTEL_PROPAGATORS": "tracecontext,baggage",
+        "OTEL_RESOURCE_PROVIDERS_AWS_ENABLED": "false",
+        "OTEL_BSP_SCHEDULE_DELAY": "1000",
+        "OTEL_SERVICE_NAME": "checkout",
+        "OTEL_RESOURCE_ATTRIBUTES": "service.namespace=aws-retail,deployment.environment=dotops-lab"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3",
+          "labels": "com.docker.compose.service"
+        }
+      }
+    },
+    "orders": {
+      "environment": {
+        "OTEL_SDK_DISABLED": "false",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://retail-collector:4318",
+        "OTEL_METRICS_EXPORTER": "none",
+        "OTEL_LOGS_EXPORTER": "none",
+        "OTEL_PROPAGATORS": "tracecontext,baggage",
+        "OTEL_RESOURCE_PROVIDERS_AWS_ENABLED": "false",
+        "OTEL_BSP_SCHEDULE_DELAY": "1000",
+        "OTEL_SERVICE_NAME": "orders",
+        "OTEL_RESOURCE_ATTRIBUTES": "service.namespace=aws-retail,deployment.environment=dotops-lab",
+        "OTEL_JAVA_GLOBAL_AUTOCONFIGURE_ENABLED": "true"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3",
+          "labels": "com.docker.compose.service"
+        }
+      }
+    },
+    "catalog-db": {
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3",
+          "labels": "com.docker.compose.service"
+        }
+      }
+    },
+    "carts-db": {
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3",
+          "labels": "com.docker.compose.service"
+        }
+      }
+    },
+    "orders-db": {
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3",
+          "labels": "com.docker.compose.service"
+        }
+      }
+    },
+    "checkout-redis": {
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3",
+          "labels": "com.docker.compose.service"
+        }
+      }
+    },
+    "rabbitmq": {
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3",
+          "labels": "com.docker.compose.service"
+        }
+      }
+    },
+    "opensearch": {
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3",
+          "labels": "com.docker.compose.service"
+        }
+      }
+    },
+    "retail-collector": {
+      "image": "otel/opentelemetry-collector-contrib:0.111.0",
+      "user": "0",
+      "command": [
+        "--config=/etc/otelcol/config.yaml"
+      ],
+      "volumes": [
+        "./observability/collector.yaml:/etc/otelcol/config.yaml:ro",
+        "/var/lib/docker/containers:/hostlogs:ro",
+        "collector-state:/var/lib/otelcol"
+      ],
+      "ports": [
+        "192.168.108.128:8889:8889"
+      ],
+      "restart": "unless-stopped",
+      "mem_limit": "256m"
+    },
+    "node-exporter": {
+      "image": "prom/node-exporter:v1.8.2",
+      "command": [
+        "--path.rootfs=/host",
+        "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|run/docker/.+)($|/)"
+      ],
+      "volumes": [
+        "/:/host:ro,rslave"
+      ],
+      "pid": "host",
+      "restart": "unless-stopped",
+      "mem_limit": "96m"
+    }
+  },
+  "volumes": {
+    "collector-state": {}
+  }
+}

@@ -76,20 +76,7 @@ export interface AgentTask {
   saved_to?: string;
   data_mode?: 'real' | 'mock';
   data_sources?: Record<string, string>;
-  diagnosis_status?: 'evidence_available' | 'insufficient_evidence';
-  http_evidence?: HttpProbeEvidence[];
   stage_progress?: Array<{ node: string; title: string; status: 'finish' | 'wait' }>;
-}
-
-export interface HttpProbeEvidence {
-  target: string;
-  checked_at: string;
-  source: string;
-  success: boolean;
-  status: string;
-  status_code: number | null;
-  duration_ms: number;
-  error?: string;
 }
 
 export interface SkillMatchInfo {

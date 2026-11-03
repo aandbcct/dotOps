@@ -1,0 +1,5 @@
+# 主机公钥文件只读挂载，关闭自动追加其他主机公钥；仍强制核验已登记的身份。
+Host 192.168.108.128
+    StrictHostKeyChecking yes
+    UpdateHostKeys no
+    IdentitiesOnly yes
