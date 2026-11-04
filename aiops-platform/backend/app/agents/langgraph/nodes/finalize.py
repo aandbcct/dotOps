@@ -15,6 +15,9 @@ _file_manager = IntermediateFileManager(
 def _serialize_state(state: AIOpsState) -> dict:
     result = {
         "user_query": state.get("user_query", ""),
+        "session_id": state.get("session_id"),
+        "requester": state.get("requester"),
+        "visited_nodes": state.get("visited_nodes", []),
         "start_time": datetime.now().isoformat(),
         "intent_data": state.get("intent_data"),
         "intent_type": state.get("intent_type"),
@@ -28,6 +31,7 @@ def _serialize_state(state: AIOpsState) -> dict:
         "approval_status": state.get("approval_status"),
         "confirmation_request": state.get("confirmation_request"),
         "diagnosis_result": state.get("diagnosis_result"),
+        "diagnosis_assessment": state.get("diagnosis_assessment"),
         "execution_history": state.get("execution_history", []),
         "warning_cleared": state.get("warning_cleared", False),
     }

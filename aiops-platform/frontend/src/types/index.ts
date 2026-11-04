@@ -53,6 +53,12 @@ export interface LogStats {
 
 export interface AgentTask {
   task_id: string;
+  diagnosis_assessment?: DiagnosisAssessment | null;
+  diagnosis_result?: unknown;
+  execution_history?: unknown[];
+  session_id?: string;
+  review?: WebApproval | null;
+  confirmation_kind?: 'ssh_user' | 'command_approval' | null;
   user_input?: string;
   status: string;
   intent_data: IntentData | null;
@@ -190,6 +196,69 @@ export interface ConfirmationRequest {
   risk: string;
   impact: string;
   message: string;
+  type?: string;
+  requires_ssh_user?: boolean;
+}
+
+export interface WebApproval {
+  approval_id: string;
+  session_id: string;
+  channel: 'web' | 'email';
+  operation: string;
+  risk: string;
+  impact: string;
+  commands: string[];
+  target_host: string;
+  ssh_user: string;
+  status: string;
+  created_at: string;
+  execution_result?: unknown;
+  execution_status?: 'not_started' | 'executing' | 'succeeded' | 'failed';
+}
+
+export interface MultiAgentResponse {
+  session_id: string;
+  diagnosis_assessment?: DiagnosisAssessment | null;
+  diagnosis_result?: unknown;
+  confirmation_kind?: 'ssh_user' | 'command_approval' | null;
+  query?: string;
+  user_input?: string;
+  status?: string;
+  review?: WebApproval | null;
+  stages?: {
+    intent_parsing?: IntentData;
+    skill_matching?: Partial<SkillMatchInfo>;
+    observability_analysis?: Partial<AnalysisReport>;
+    knowledge_query?: Partial<KnowledgeContext>;
+    dynamic_execution?: {
+      status?: string;
+      iterations?: number;
+      command_entries?: ExecutionOutput[];
+      email_approval?: EmailApprovalInfo | null;
+    };
+    server_status_check?: ServerStatusCheck | null;
+  };
+  final_decision?: Decision | null;
+  execution_result?: ActionResult | null;
+  execution_history?: unknown[];
+  start_time?: string;
+  end_time?: string;
+  warning_cleared?: boolean;
+  mode?: string;
+  raw_response?: string;
+  saved_to?: string;
+  data_mode?: AgentTask['data_mode'];
+  data_sources?: AgentTask['data_sources'];
+  stage_progress?: AgentTask['stage_progress'];
+}
+
+export interface DiagnosisAssessment {
+  status: 'confirmed' | 'suspected' | 'inconclusive';
+  problem: string;
+  evidence: Array<{ id: string; tool: string; observation: string; source: string }>;
+  impact: string;
+  next_steps: string;
+  limitations: string[];
 }
 
 export interface ActionResult {

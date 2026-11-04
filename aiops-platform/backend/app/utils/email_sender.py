@@ -13,6 +13,16 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 from ..core.config import settings
+from ..services.approval_service import approval_service
+
+
+def extract_approval_id(text: str) -> Optional[str]:
+    """兼容完整 UUID 与历史八位编号，不把完整编号截断。"""
+    match = re.search(
+        r"(?<![0-9a-f-])(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{8})(?![0-9a-f-])",
+        text, re.IGNORECASE,
+    )
+    return match.group(0).lower() if match else None
 
 
 class ApprovalManager:
@@ -61,6 +71,7 @@ class ApprovalManager:
             "commands": commands,
             "target_host": target_host,
             "email": email,
+            "channel": "email",
             "status": "pending",
             "created_at": datetime.now().isoformat(),
             "approved_at": None,
@@ -79,6 +90,12 @@ class ApprovalManager:
         """
         批准操作
         """
+        approval_id = approval_id.strip().lower()
+        shared = approval_service.get(approval_id)
+        if shared and shared.get("channel", "email") != "email":
+            raise PermissionError("邮件入口只能处理邮件渠道审批")
+        if shared and shared.get("session_id"):
+            return approval_service.decide(approval_id, shared["session_id"], True, approved_by)
         if approval_id not in self.pending_approvals:
             filepath = self.data_dir / f"{approval_id}.json"
             if filepath.exists():
@@ -92,6 +109,8 @@ class ApprovalManager:
                 return None
         
         approval = self.pending_approvals[approval_id]
+        if approval.get("channel", "email") != "email":
+            raise PermissionError("邮件入口只能处理邮件渠道审批")
         approval["status"] = "approved"
         approval["approved_at"] = datetime.now().isoformat()
         approval["approved_by"] = approved_by
@@ -108,6 +127,12 @@ class ApprovalManager:
         """
         拒绝操作
         """
+        approval_id = approval_id.strip().lower()
+        shared = approval_service.get(approval_id)
+        if shared and shared.get("channel", "email") != "email":
+            raise PermissionError("邮件入口只能处理邮件渠道审批")
+        if shared and shared.get("session_id"):
+            return approval_service.decide(approval_id, shared["session_id"], False, "email_reply", reason)
         if approval_id not in self.pending_approvals:
             filepath = self.data_dir / f"{approval_id}.json"
             if filepath.exists():
@@ -121,6 +146,8 @@ class ApprovalManager:
                 return None
         
         approval = self.pending_approvals[approval_id]
+        if approval.get("channel", "email") != "email":
+            raise PermissionError("邮件入口只能处理邮件渠道审批")
         approval["status"] = "rejected"
         approval["rejected_at"] = datetime.now().isoformat()
         approval["reject_reason"] = reason
@@ -137,6 +164,10 @@ class ApprovalManager:
         """
         获取审批信息
         """
+        approval_id = approval_id.strip().lower()
+        shared = approval_service.get(approval_id)
+        if shared and shared.get("session_id"):
+            return shared
         if approval_id in self.pending_approvals:
             return self.pending_approvals[approval_id]
         
@@ -307,7 +338,8 @@ AIOps 智能运维平台 - 操作审批请求
         risk: str,
         impact: str,
         commands: List[str],
-        target_host: str
+        target_host: str,
+        approval_id: str = ""
     ) -> Dict[str, Any]:
         """
         发送审批请求邮件
@@ -318,7 +350,7 @@ AIOps 智能运维平台 - 操作审批请求
                 "error": "SMTP 配置不完整，请设置 SMTP_USER 和 SMTP_PASSWORD 环境变量"
             }
         
-        approval_id = self.approval_manager.create_approval(
+        approval_id = approval_id or self.approval_manager.create_approval(
             operation=operation,
             risk=risk,
             impact=impact,
@@ -433,19 +465,20 @@ AIOps 智能运维平台 - 操作审批请求
                         subject = str(msg.get("Subject", ""))
 
                         combined = subject + " " + body
-                        combined_upper = combined.upper()
-
-                        approval_match = re.search(r'(?:APPROVE|批准|同意)\s*([a-f0-9]{8})', combined_upper)
-                        if approval_match:
-                            aid = approval_match.group(1).lower()
-                            results[aid] = "approved"
-                            conn.store(msg_id, '+FLAGS', '\\Seen')
+                        aid = extract_approval_id(combined)
+                        if not aid:
                             continue
-
-                        reject_match = re.search(r'(?:REJECT|拒绝|不同意)\s*([a-f0-9]{8})', combined_upper)
-                        if reject_match:
-                            aid = reject_match.group(1).lower()
+                        record = self.approval_manager.get_approval(aid)
+                        if not record or record.get("channel", "email") != "email":
+                            continue
+                        # 拒绝优先，避免“不同意”被识别成“同意”。
+                        if re.search(r"REJECT|拒绝|不同意", combined, re.IGNORECASE):
                             results[aid] = "rejected"
+                        elif re.search(r"APPROVE|批准|同意", combined, re.IGNORECASE):
+                            results[aid] = "approved"
+                        else:
+                            continue
+                        if aid in results:
                             conn.store(msg_id, '+FLAGS', '\\Seen')
 
                     except Exception:

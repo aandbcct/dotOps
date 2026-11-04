@@ -5,6 +5,9 @@ from langgraph.graph.message import add_messages
 class AIOpsState(TypedDict):
     messages: Annotated[list, add_messages]
     user_query: str
+    session_id: Optional[str]
+    requester: Optional[str]
+    started_at: Optional[str]
     visited_nodes: List[str]
     intent_data: Optional[Dict[str, Any]]
     entities: Optional[Dict[str, Any]]
@@ -18,8 +21,12 @@ class AIOpsState(TypedDict):
     observability_report: Optional[Dict[str, Any]]
     execution_history: List[Dict[str, Any]]
     diagnosis_result: Optional[Dict[str, Any]]
+    diagnosis_assessment: Optional[Dict[str, Any]]
+    verification_feedback: Optional[str]
+    verification_attempts: int
     confirmation_request: Optional[Dict[str, Any]]
     approval_status: Optional[str]
     iteration_count: int
     error: Optional[str]
     warning_cleared: bool
+    full_result_path: Optional[str]

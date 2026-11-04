@@ -27,6 +27,12 @@ class SkillManager:
     """
     
     SKILL_REGISTRY = {
+        "retail_store_skill": {
+            "path": "diagnosis/retail_store_skill.md",
+            "category": "diagnosis",
+            "description": "AWS Retail Store 业务页面、依赖与只读故障检查",
+            "keywords": ["retail-store", "retail-sample", "aws retail", "aws商城"],
+        },
         "debug_skill": {
             "path": "diagnosis/debug_skill.md",
             "category": "diagnosis",
@@ -1469,6 +1475,10 @@ class SkillManager:
         if has_ip or has_server_keyword:
             scores["login_skill"] += 20
             matched_keywords["login_skill"].add("远程服务器" if has_server_keyword else "IP地址")
+
+        # 明确提到业务部署时优先加载对应 SOP，避免泛用排障技能挤掉业务入口说明。
+        if any(keyword in combined_text for keyword in self.SKILL_REGISTRY["retail_store_skill"]["keywords"]):
+            scores["retail_store_skill"] += 30
         
         if not scores:
             return ["debug_skill"]

@@ -3,6 +3,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from collections.abc import Awaitable, Callable
 
 from .state import AIOpsState
+from .nodes.review_execute import review_execute_node
 from .nodes import (
     intent_parse_node,
     ssh_check_node,
@@ -26,6 +27,10 @@ def _route_approval(state: AIOpsState) -> str:
     return "rejected"
 
 
+def _route_review_execution(state: AIOpsState) -> str:
+    return "continue" if state.get("approval_status") == "executed" else "failed"
+
+
 def build_aiops_graph():
     graph = StateGraph(AIOpsState)
 
@@ -43,6 +48,7 @@ def build_aiops_graph():
     graph.add_node("react_agent", tracked("react_agent", react_agent_node))
     graph.add_node("knowledge_qa", tracked("knowledge_qa", knowledge_qa_node))
     graph.add_node("approval", tracked("approval", approval_node))
+    graph.add_node("review_execute", tracked("review_execute", review_execute_node))
     graph.add_node("human_review", tracked("human_review", human_review_node))
     graph.add_node("finalize", tracked("finalize", finalize_node))
 
@@ -84,12 +90,15 @@ def build_aiops_graph():
         "approval",
         _route_approval,
         {
-            "approved": "react_agent",
+            "approved": "review_execute",
             "rejected": "finalize",
         },
     )
 
     graph.add_edge("knowledge_qa", "finalize")
+    graph.add_conditional_edges("review_execute", _route_review_execution, {
+        "continue": "react_agent", "failed": "finalize",
+    })
     graph.add_edge("finalize", END)
 
     memory = MemorySaver()
@@ -97,4 +106,5 @@ def build_aiops_graph():
     return graph.compile(
         checkpointer=memory,
         interrupt_before=["human_review"],
+        interrupt_after=["approval"],
     )

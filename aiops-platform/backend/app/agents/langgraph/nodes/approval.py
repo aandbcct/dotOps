@@ -10,7 +10,7 @@ async def approval_node(state: AIOpsState) -> dict:
             {
                 "role": "system",
                 "content": (
-                    f"等待用户审批: {confirmation.get('operation', '')} "
+                    f"等待用户审批（页面可批准或拒绝）: {confirmation.get('operation', '')} "
                     f"(风险: {confirmation.get('risk', '')})"
                 ),
             }

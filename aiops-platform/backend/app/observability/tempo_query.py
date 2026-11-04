@@ -368,6 +368,23 @@ class TempoQueryClient:
             logger.error(f"Error querying trace {trace_id}: {e}")
             raise
     
+    async def list_services(self, lookback: str = "1h") -> Dict[str, Any]:
+        """读取查询窗口内真实的 service.name 标签值，不推断业务别名。"""
+        match = re.fullmatch(r"([1-9][0-9]*)([smhd])", lookback)
+        if not match:
+            raise ValueError("回看时间应为正整数和 s、m、h 或 d")
+        seconds = int(match[1]) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[match[2]]
+        end = int(datetime.now(timezone.utc).timestamp())
+        response = await self._get_client().get(
+            "/api/search/tag/service.name/values", params={"start": end - seconds, "end": end},
+        )
+        response.raise_for_status()
+        values = response.json().get("tagValues")
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            raise ValueError("Tempo service.name 响应格式不正确，无法验证服务名称")
+        return {"services": sorted(set(values)), "lookback": lookback,
+                "start": end - seconds, "end": end, "source": "tempo.service.name"}
+
     async def search_traces(
         self,
         tags: Optional[Dict[str, str]] = None,

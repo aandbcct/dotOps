@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     POLARDB_ENDPOINT_TYPE: str = "cluster"
     
     SMTP_HOST: str = "smtp.163.com"
+    APPROVAL_CHANNEL: str = "web"
     SMTP_PORT: int = 465
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""

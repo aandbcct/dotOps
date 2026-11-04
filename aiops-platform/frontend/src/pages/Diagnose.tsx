@@ -1,126 +1,131 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { isAxiosError } from 'axios';
 import { Alert, Card, Grid, Input, Button, Tag, Steps, Spin, message, Typography, Collapse, Descriptions, Space } from 'antd';
 import { SendOutlined } from '@ant-design/icons';
 
 import { agentApi } from '../services/api';
-import type { AgentTask } from '../types';
+import type { AgentTask, MultiAgentResponse } from '../types';
+import ApprovalReview from '../components/ApprovalReview';
 
 const { TextArea } = Input;
-const { Title, Text, Paragraph } = Typography;
+const { Text, Paragraph } = Typography;
 const { Panel } = Collapse;
+
+const SESSION_KEY = 'dotops-diagnosis-session';
+
+function errorMessage(error: unknown): string {
+  if (isAxiosError(error)) {
+    const detail = error.response?.data?.detail ?? error.response?.data?.message;
+    if (error.response?.status === 404) return '诊断会话已失效，可能是服务重启导致检查点丢失。请重新发起诊断。';
+    return typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : error.message;
+  }
+  return error instanceof Error ? error.message : '请求失败，请重试';
+}
+
+function mapResponse(data: MultiAgentResponse, query = ''): AgentTask {
+  const stages = data.stages || {};
+  const dynamic = stages.dynamic_execution || {};
+  const analysis = stages.observability_analysis || {};
+  const knowledge = stages.knowledge_query || {};
+  const skills = stages.skill_matching || {};
+  const reviewStatus = data.review?.status.toLowerCase();
+  const dynamicStatus = dynamic.status || data.status || '';
+  let status = 'processing';
+  if (reviewStatus === 'rejected' || dynamicStatus === 'rejected') status = 'rejected';
+  else if (reviewStatus === 'failed' || data.review?.execution_status === 'failed' || ['failed', 'error'].includes(dynamicStatus)) status = 'failed';
+  else if ((reviewStatus && ['pending', 'waiting', 'waiting_approval', 'needs_confirmation'].includes(reviewStatus))
+    || data.confirmation_kind || ['needs_confirmation', 'waiting_approval'].includes(dynamicStatus)
+    || data.final_decision?.decision === 'NEEDS_CONFIRMATION') status = 'needs_confirmation';
+  else if (['completed', 'success', 'terminated'].includes(dynamicStatus) || data.final_decision?.is_final) status = 'completed';
+  else if (['incomplete', 'expired', 'cancelled'].includes(dynamicStatus)) status = 'failed';
+  return {
+    task_id: data.session_id, session_id: data.session_id, review: data.review,
+    diagnosis_assessment: data.diagnosis_assessment, diagnosis_result: data.diagnosis_result, execution_history: data.execution_history,
+    confirmation_kind: data.confirmation_kind, user_input: data.query || data.user_input || query, status,
+    intent_data: stages.intent_parsing || null,
+    analysis_report: { analysis_report: analysis.analysis_report || data.raw_response || '', diagnosis_plan: analysis.diagnosis_plan },
+    knowledge_context: { knowledge_report: knowledge.knowledge_report || '', service: knowledge.service || '' },
+    decision: data.final_decision || null, action_result: data.execution_result || null,
+    created_at: data.start_time || '', updated_at: data.end_time || '',
+    warning_cleared: data.warning_cleared, server_status_check: stages.server_status_check,
+    mode: data.mode, iterations: dynamic.iterations, diagnosis_plan: analysis.diagnosis_plan,
+    execution_outputs: dynamic.command_entries || [],
+    skill_matching: { matched_skills: skills.matched_skills || [], skill_summary: skills.skill_summary || '', skills_preview: skills.skills_preview || '' },
+    email_approval: dynamic.email_approval, raw_response: data.raw_response, saved_to: data.saved_to,
+    data_mode: data.data_mode, data_sources: data.data_sources, stage_progress: data.stage_progress,
+  };
+}
 
 const Diagnose = () => {
   const screens = Grid.useBreakpoint();
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [currentTask, setCurrentTask] = useState<AgentTask | null>(null);
-  const [polling, setPolling] = useState(false);
+  const [error, setError] = useState('');
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [sshUser, setSshUser] = useState('');
+  const inFlight = useRef(false);
 
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    if (polling && currentTask && currentTask.status === 'processing') {
-      interval = setInterval(async () => {
-        try {
-          const task = await agentApi.getTaskStatus(currentTask.task_id);
-          setCurrentTask(task);
-          if (task.status !== 'processing') {
-            setPolling(false);
-          }
-        } catch (error) {
-          message.error('获取任务状态失败');
-          setPolling(false);
-        }
-      }, 2000);
-    }
-    return () => clearInterval(interval);
-  }, [polling, currentTask]);
-
-  const handleSubmit = async () => {
-    if (!input.trim()) {
-      message.warning('请输入故障描述');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const response = await fetch('/aiops/api/multi-agent/process', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ query: input }),
-      });
-
-      if (!response.ok) {
-        throw new Error('请求失败');
-      }
-
-      const data = await response.json();
-      
-      const stages = data.stages || {};
-      const intentParsing = stages.intent_parsing || {};
-      const skillMatching = stages.skill_matching || {};
-      const obsAnalysis = stages.observability_analysis || {};
-      const knowledgeQuery = stages.knowledge_query || {};
-      const dynamicExec = stages.dynamic_execution || {};
-
-      const diagnosisPlan = obsAnalysis.diagnosis_plan || null;
-      const commandEntries = dynamicExec.command_entries || [];
-      const emailApproval = dynamicExec.email_approval || null;
-
-      const dynamicStatus = dynamicExec.status || 'processing';
-      let taskStatus: 'completed' | 'processing' | 'needs_confirmation' = 'processing';
-      if (dynamicStatus === 'completed') {
-        taskStatus = 'completed';
-      } else if (dynamicStatus === 'needs_confirmation' || dynamicStatus === 'waiting_approval' 
-                 || data.final_decision?.decision === 'NEEDS_CONFIRMATION') {
-        taskStatus = 'needs_confirmation';
-      }
-      
-      setCurrentTask({
-        task_id: 'multi-agent-' + Date.now(),
-        user_input: input,
-        status: taskStatus,
-        intent_data: intentParsing,
-        analysis_report: {
-          analysis_report: obsAnalysis.analysis_report || data.raw_response || '',
-          diagnosis_plan: diagnosisPlan,
-        },
-        knowledge_context: {
-          knowledge_report: knowledgeQuery.knowledge_report || '',
-          service: knowledgeQuery.service || '',
-        },
-        decision: data.final_decision || null,
-        action_result: data.execution_result || null,
-        created_at: data.start_time,
-        updated_at: data.end_time,
-        warning_cleared: data.warning_cleared || false,
-        server_status_check: data.stages?.server_status_check || null,
-        mode: data.mode,
-        iterations: dynamicExec.iterations,
-        diagnosis_plan: diagnosisPlan,
-        execution_outputs: commandEntries,
-        skill_matching: {
-          matched_skills: skillMatching.matched_skills || [],
-          skill_summary: skillMatching.skill_summary || '',
-          skills_preview: skillMatching.skills_preview || '',
-        },
-        email_approval: emailApproval,
-        raw_response: data.raw_response,
-        saved_to: data.saved_to,
-        data_mode: data.data_mode,
-        data_sources: data.data_sources,
-        stage_progress: data.stage_progress,
-      });
-      
-      message.success('请求处理结束');
-    } catch (error) {
-      message.error('诊断失败');
-    } finally {
-      setLoading(false);
-    }
+  const applyResponse = (data: MultiAgentResponse, query?: string) => {
+    if (!data.session_id) throw new Error('响应缺少诊断会话 ID，无法继续此流程');
+    sessionStorage.setItem(SESSION_KEY, data.session_id);
+    setCurrentTask(mapResponse(data, query));
+    setSessionExpired(false);
   };
 
+  useEffect(() => {
+    const sessionId = sessionStorage.getItem(SESSION_KEY);
+    if (!sessionId) return;
+    let active = true;
+    setLoading(true);
+    inFlight.current = true;
+    agentApi.getSession(sessionId).then(data => {
+      if (active) { applyResponse(data); setInput(data.query || data.user_input || ''); }
+    }).catch(error => {
+      if (active) {
+        setError(errorMessage(error));
+        setSessionExpired(isAxiosError(error) && error.response?.status === 404);
+      }
+    }).finally(() => {
+      if (active) { setLoading(false); inFlight.current = false; }
+    });
+    return () => { active = false; };
+  }, []);
+
+  const runAction = async (action: () => Promise<MultiAgentResponse>, query?: string) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setLoading(true);
+    setError('');
+    try { applyResponse(await action(), query); }
+    catch (error) {
+      setError(errorMessage(error));
+      if (isAxiosError(error) && error.response?.status === 404) setSessionExpired(true);
+    } finally { setLoading(false); inFlight.current = false; }
+  };
+
+  const handleSubmit = async () => {
+    if (!input.trim()) { message.warning('请输入故障描述'); return; }
+    if (inFlight.current) return;
+    const sessionId = crypto.randomUUID();
+    sessionStorage.setItem(SESSION_KEY, sessionId);
+    setCurrentTask(null);
+    setSessionExpired(false);
+    await runAction(() => agentApi.process(input.trim(), sessionId), input.trim());
+  };
+
+  const handleReview = async (approved: boolean, reason?: string) => {
+    if (!currentTask?.session_id || !currentTask.review || sessionExpired) return;
+    await runAction(() => agentApi.review(currentTask.session_id!, currentTask.review!.approval_id, approved, reason), currentTask.user_input);
+  };
+
+  const confirmation = currentTask?.decision?.confirmation_request;
+  const needsSshUser = currentTask?.status === 'needs_confirmation' && !currentTask.review && (
+    currentTask.confirmation_kind === 'ssh_user' || (!currentTask.confirmation_kind && (
+      confirmation?.requires_ssh_user || confirmation?.type === 'ssh_user' ||
+      /ssh.*(用户|账号|user)|username/i.test(`${confirmation?.operation || ''} ${confirmation?.message || ''}`)
+    ))
+  );
   const getRiskColor = (risk: string) => {
     const colors: Record<string, string> = { HIGH: 'red', MEDIUM: 'orange', LOW: 'green' };
     return colors[risk] || 'default';
@@ -138,6 +143,7 @@ const Diagnose = () => {
 
   return (
     <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+      {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
       <Card title="故障诊断" style={{ marginBottom: 16 }}>
         <Space.Compact style={{ width: '100%' }}>
           <TextArea
@@ -157,51 +163,98 @@ const Diagnose = () => {
             诊断
           </Button>
         </Space.Compact>
+        {sessionStorage.getItem(SESSION_KEY) && (
+          <Button style={{ marginTop: 12 }} disabled={loading || sessionExpired} onClick={() => {
+            const sessionId = sessionStorage.getItem(SESSION_KEY);
+            if (sessionId) void runAction(() => agentApi.getSession(sessionId), currentTask?.user_input);
+          }}>刷新当前诊断状态</Button>
+        )}
       </Card>
 
       {currentTask && (
-        <Card style={{ marginBottom: 16 }}>
-          <Alert
-            type={currentTask.data_mode === 'mock' ? 'warning' : 'info'}
-            showIcon
-            style={{ marginBottom: 16 }}
-            message={currentTask.data_mode === 'mock' ? '演示模式：可能包含模拟数据' : '真实模式：未接入或查询失败不会使用模拟数据补齐'}
-            description="模型建议不等于实际执行；请根据工具执行记录核对证据，流程结束不代表故障已修复。"
-          />
-          <Steps
-            size="small"
-            direction={screens.xl ? 'horizontal' : 'vertical'}
-            responsive
-            items={(currentTask.stage_progress || []).map(step => ({
-              title: step.title,
-              status: step.status,
-              description: step.status === 'finish' ? '节点已运行' : '未执行',
-            }))}
-          />
-          <Space wrap style={{ marginTop: 16 }}>
-            {Object.entries(currentTask.data_sources || {}).map(([key, source]) => (
-              <Tag key={key} color={source === 'mock_data' ? 'orange' : source === 'model_generated' ? 'blue' : 'default'}>
-                {key}: {source === 'model_generated' ? '模型建议' : source === 'mock_data' ? '模拟数据' : source}
-              </Tag>
-            ))}
+        <Card title={currentTask.diagnosis_assessment ? '诊断结论' : '诊断状态'} style={{ marginBottom: 16 }}>
+          <Space wrap style={{ marginBottom: 16 }}>
+            <Tag color={currentTask.diagnosis_assessment?.status === 'confirmed' ? 'blue' : 'orange'}>
+              {currentTask.diagnosis_assessment
+                ? { confirmed: '已有根因支持证据', suspected: '待验证推测', inconclusive: '证据不足' }[currentTask.diagnosis_assessment.status]
+                : currentTask.status === 'needs_confirmation' ? '等待人工确认'
+                  : currentTask.status === 'rejected' ? '已拒绝，流程已终止'
+                    : currentTask.status === 'failed' ? '诊断或命令执行失败'
+                      : currentTask.status === 'completed' ? '流程已结束，尚无诊断评估' : '正在处理中'}
+            </Tag>
+            {currentTask.diagnosis_assessment && (
+              <Tag>{({ needs_confirmation: '等待人工确认', rejected: '已拒绝，流程已终止', failed: '诊断或命令执行失败', completed: '流程已结束', processing: '正在处理中' } as Record<string, string>)[currentTask.status] || currentTask.status}</Tag>
+            )}
+            <Text type="secondary">{currentTask.data_mode === 'mock' ? '演示数据' : '实际诊断流程'} · 流程结束不等于业务已恢复</Text>
           </Space>
+          {currentTask.diagnosis_assessment ? (
+            <Descriptions column={1} size="small">
+              <Descriptions.Item label="问题">{currentTask.diagnosis_assessment.problem || '未提供'}</Descriptions.Item>
+              <Descriptions.Item label="关键证据">
+                {currentTask.diagnosis_assessment.evidence.length ? (
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    {currentTask.diagnosis_assessment.evidence.map((item, index) => (
+                      <div key={`${item.id}-${index}`}>
+                        <Text>{item.observation}</Text>
+                        <div><Text type="secondary">{[item.id, item.tool, item.source].filter(Boolean).join(' · ')}</Text></div>
+                      </div>
+                    ))}
+                  </Space>
+                ) : '未提供可核对的关键证据'}
+              </Descriptions.Item>
+              <Descriptions.Item label="影响">{currentTask.diagnosis_assessment.impact || '未提供'}</Descriptions.Item>
+              <Descriptions.Item label="下一步">{currentTask.diagnosis_assessment.next_steps || '未提供'}</Descriptions.Item>
+              {currentTask.diagnosis_assessment.limitations.length > 0 && (
+                <Descriptions.Item label="仍待核对">
+                  <Space direction="vertical">{currentTask.diagnosis_assessment.limitations.map((item, index) => <Text key={index}>{item}</Text>)}</Space>
+                </Descriptions.Item>
+              )}
+            </Descriptions>
+          ) : (
+            <Paragraph style={{ marginBottom: 0 }}>
+              {currentTask.status === 'needs_confirmation' ? '完成下方人工确认后，将继续同一诊断流程。'
+                : currentTask.status === 'rejected' ? '本次执行已被拒绝，未形成最终诊断评估。'
+                  : currentTask.status === 'failed' ? '请展开诊断详情核对失败原因。'
+                    : currentTask.status === 'completed' ? '后端未返回最终诊断评估，请展开诊断详情核对已有记录。'
+                      : '诊断评估尚未形成，请等待流程返回结果。'}
+            </Paragraph>
+          )}
         </Card>
       )}
-
-      {currentTask && currentTask.status === 'completed' && (
-        <>
-          {currentTask.warning_cleared && (
-            <Card style={{ marginBottom: 16, backgroundColor: '#f6ffed', borderColor: '#b7eb8f' }}>
-              <div style={{ textAlign: 'center', padding: 20 }}>
-                <Title level={3} style={{ color: '#52c41a', marginBottom: 16 }}>✅ 警告已解除</Title>
-                <Paragraph style={{ fontSize: 16 }}>
-                  {currentTask.decision?.action_plan || '服务器状态检查完成，未发现异常'}
-                </Paragraph>
-              </div>
-            </Card>
-          )}
-          
-          <Collapse defaultActiveKey={['1', '2', '3', '4', '5', '6', '7', '8']}>
+      {currentTask?.review && (
+        <ApprovalReview key={currentTask.review.approval_id} review={currentTask.review} busy={loading} disabled={sessionExpired} onReview={handleReview} />
+      )}
+      {needsSshUser && currentTask?.session_id && (
+        <Card title="补充 SSH 账号后继续诊断" style={{ marginBottom: 16 }}>
+          <Paragraph>{confirmation?.message}</Paragraph>
+          <Space.Compact style={{ width: '100%' }}>
+            <Input value={sshUser} onChange={event => setSshUser(event.target.value)} placeholder="SSH 用户名" disabled={loading || sessionExpired} />
+            <Button type="primary" loading={loading} disabled={!sshUser.trim() || loading || sessionExpired}
+              onClick={() => void runAction(() => agentApi.provideSshUser(currentTask.session_id!, sshUser.trim()), currentTask.user_input)}>继续诊断</Button>
+          </Space.Compact>
+        </Card>
+      )}
+      {currentTask?.status === 'needs_confirmation' && !currentTask.review && !needsSshUser && (
+        <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="流程等待确认"
+          description={confirmation?.message || currentTask.email_approval?.message || '未返回网页审批记录，当前无法提交审批。'} />
+      )}
+      {currentTask && (currentTask.status !== 'processing') && (
+        <Collapse style={{ marginBottom: 16 }}>
+          <Panel header="诊断详情：流程、模型分析与原始执行记录" key="details">
+          <Collapse defaultActiveKey={[]} style={{ marginBottom: 16 }}>
+            <Panel header="流程节点与数据来源" key="progress">
+              <Steps size="small" direction={screens.xl ? 'horizontal' : 'vertical'} responsive
+                items={(currentTask.stage_progress || []).map(step => ({
+                  title: step.title, status: step.status,
+                  description: step.status === 'finish' ? '节点已运行' : '未执行',
+                }))} />
+              <Space wrap style={{ marginTop: 16 }}>
+                {Object.entries(currentTask.data_sources || {}).map(([key, source]) => (
+                  <Tag key={key}>{key}: {source === 'model_generated' ? '模型建议' : source === 'mock_data' ? '模拟数据' : source}</Tag>
+                ))}
+              </Space>
+              {currentTask.data_mode === 'mock' && <Alert style={{ marginTop: 16 }} type="warning" message="演示模式：可能包含模拟数据" />}
+            </Panel>
             <Panel header="意图识别结果" key="1">
               {currentTask.intent_data && (
                 <Descriptions column={2} size="small">
@@ -297,8 +350,8 @@ const Diagnose = () => {
               </Panel>
             )}
 
-            {currentTask.mode === 'dynamic' && currentTask.diagnosis_plan && (
-              <Panel header={`诊断计划 (${currentTask.iterations} 次迭代)`} key="8">
+            {currentTask.diagnosis_plan && (
+              <Panel header={`诊断计划 (${currentTask.iterations} 次迭代)`} key="10">
                 <Descriptions column={2} size="small">
                   <Descriptions.Item label="计划名称">{currentTask.diagnosis_plan.plan_name}</Descriptions.Item>
                   <Descriptions.Item label="检查类型">
@@ -352,7 +405,7 @@ const Diagnose = () => {
             )}
 
             {currentTask.saved_outputs && currentTask.saved_outputs.length > 0 && (
-              <Panel header="保存的中间文件" key="10">
+              <Panel header="保存的中间文件" key="saved">
                 <div>
                   {currentTask.saved_outputs.map((item: any, index: number) => (
                     <div key={index} style={{ padding: '8px 0', borderBottom: index < currentTask.saved_outputs!.length - 1 ? '1px solid #f0f0f0' : 'none' }}>
@@ -401,7 +454,7 @@ const Diagnose = () => {
               )}
             </Panel>
 
-            <Panel header="决策结果" key="4">
+            <Panel header="模型原始决策（待核对）" key="4">
               {currentTask.decision && (
                 <div>
                   {currentTask.decision.is_final ? (
@@ -474,57 +527,18 @@ const Diagnose = () => {
                 </Paragraph>
               </Panel>
             )}
+            {(currentTask.diagnosis_result != null || currentTask.execution_history?.length) ? (
+              <Panel header="原始诊断与执行数据" key="raw">
+                <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 480, overflow: 'auto' }}>
+                  {JSON.stringify({ diagnosis_result: currentTask.diagnosis_result, execution_history: currentTask.execution_history }, null, 2)}
+                </pre>
+              </Panel>
+            ) : null}
           </Collapse>
-        </>
+          </Panel>
+        </Collapse>
       )}
 
-      {currentTask && currentTask.status === 'needs_confirmation' && (
-        <Card style={{ marginBottom: 16, backgroundColor: '#fffbe6', borderColor: '#ffe58f' }}>
-          {currentTask.email_approval?.email_sent ? (
-            <div style={{ padding: 20, textAlign: 'center' }}>
-              <Title level={4} style={{ color: '#d48806', marginBottom: 16 }}>✉️ 审批邮件已发送</Title>
-              <Descriptions column={1} size="small" style={{ textAlign: 'left' }}>
-                <Descriptions.Item label="收件人">{currentTask.email_approval.to_email}</Descriptions.Item>
-                <Descriptions.Item label="审批 ID">
-                  <Tag color="blue">{currentTask.email_approval.approval_id}</Tag>
-                </Descriptions.Item>
-                <Descriptions.Item label="操作内容">{currentTask.email_approval.operation}</Descriptions.Item>
-                <Descriptions.Item label="风险等级">
-                  <Tag color="orange">{currentTask.email_approval.risk}</Tag>
-                </Descriptions.Item>
-              </Descriptions>
-              <Paragraph style={{ marginTop: 16, color: '#666' }}>
-                请检查邮箱并回复邮件进行确认。回复含 <Tag>APPROVE</Tag> 或 <Tag>批准</Tag> 即批准执行。
-              </Paragraph>
-              <Paragraph style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
-                审批通过后，系统将自动执行已批准的命令并更新诊断结果。当前状态：{currentTask.email_approval.status}
-              </Paragraph>
-            </div>
-          ) : currentTask.decision?.confirmation_request ? (
-            <div style={{ padding: 20 }}>
-              <Title level={4} style={{ color: '#d48806', marginBottom: 16 }}>⚠️ 需要用户确认</Title>
-              <Paragraph style={{ fontSize: 16, marginBottom: 16 }}>
-                <Text strong>操作：</Text>{currentTask.decision.confirmation_request.operation}
-              </Paragraph>
-              <Paragraph style={{ marginBottom: 8 }}>
-                <Text strong>风险：</Text>
-                <Tag color="orange">{currentTask.decision.confirmation_request.risk}</Tag>
-              </Paragraph>
-              <Paragraph style={{ marginBottom: 8 }}>
-                <Text strong>影响：</Text>{currentTask.decision.confirmation_request.impact}
-              </Paragraph>
-              <Paragraph style={{ marginTop: 16, color: '#666' }}>
-                {currentTask.decision.confirmation_request.message}
-              </Paragraph>
-            </div>
-          ) : (
-            <div style={{ padding: 20, textAlign: 'center' }}>
-              <Spin size="default" />
-              <Paragraph style={{ marginTop: 16 }}>等待处理中...</Paragraph>
-            </div>
-          )}
-        </Card>
-      )}
 
       {currentTask && currentTask.status === 'processing' && (
         <Card style={{ textAlign: 'center', padding: 40 }}>

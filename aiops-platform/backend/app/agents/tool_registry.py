@@ -7,10 +7,15 @@ import re
 from typing import Dict, Any, List, Callable, Optional
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
+import uuid
+import time
+import httpx
 
 from ..utils.file_manager import IntermediateFileManager
 from ..utils.logger import get_logger
 from ..core.config import settings
+from ..services.approval_service import approval_service, approval_session
 
 logger = get_logger("tool_registry")
 
@@ -89,6 +94,8 @@ class ToolRegistry:
         self.register("detect_log_anomalies", self._detect_log_anomalies)
         self.register("cluster_alerts", self._cluster_alerts)
         self.register("analyze_trace", self._analyze_trace)
+        self.register("list_trace_services", self._list_trace_services)
+        self.register("probe_http", self._probe_http)
         self.register("analyze_service_dependency", self._analyze_service_dependency)
         self.register("query_grafana_logs", self._query_grafana_logs)
         self.register("mcp_call", self._mcp_call)
@@ -181,9 +188,10 @@ class ToolRegistry:
         # L2 中风险：返回模拟的"需用户确认"结果
         if security_check["risk_level"] == RISK_MEDIUM and security_check.get("requires_confirmation"):
             logger.info(f"Command requires confirmation (L2): {command[:100]}...")
-            self._last_pending_command = {
+            self._last_pending_command[approval_session.get()] = {
                 "command": command,
                 "target_host": target_host or "",
+                "ssh_user": ssh_user or settings.SSH_USER or "root",
                 "risk": security_check.get("risk_level", RISK_MEDIUM),
                 "reason": security_check.get("reason", ""),
             }
@@ -619,146 +627,68 @@ class ToolRegistry:
             }
     
     async def _ask_user_confirmation(
-        self,
-        operation: str,
-        risk: str,
-        impact: str = "",
-        command: str = "",
-        target_host: str = ""
+        self, operation: str, risk: str, impact: str = "", command: str = "",
+        target_host: str = "", ssh_user: str = ""
     ) -> Dict[str, Any]:
-        """
-        请求用户确认（高风险操作）— 自动发送邮件审批
-        """
-        from ..utils.email_sender import email_sender as _email_sender
+        """按配置创建会话审批；网页渠道不依赖邮件服务。"""
+        try:
+            pending = self._last_pending_command.get(approval_session.get(), {})
+            if pending:
+                # 已拦截命令的审批只能绑定原始目标和身份，不能在确认时替换。
+                if ((command and command != pending["command"])
+                        or (target_host and target_host != pending["target_host"])
+                        or (ssh_user and ssh_user != pending["ssh_user"])):
+                    return {"success": False, "error": "审批参数与本会话原始待确认命令不一致"}
+                command = pending["command"]
+                target_host = pending["target_host"]
+                ssh_user = pending["ssh_user"]
+            security = self._check_command_security(command, target_host)
+            if security["risk_level"] == RISK_HIGH or risk.upper() == RISK_HIGH:
+                return {"success": False, "risk_level": RISK_HIGH, "error": "L3 高风险命令禁止审批或执行"}
+            approval = approval_service.create(operation, risk, impact, command,
+                                               target_host, ssh_user or settings.SSH_USER or "root")
+            result = {"success": True, "requires_confirmation": True, **approval,
+                      "message": "等待用户审批，批准后才会执行原始命令"}
+            if approval["channel"] == "email":
+                # 邮件策略复用相同记录，避免出现两个审批状态源。
+                from ..utils.email_sender import email_sender
+                sent = await email_sender.send_approval_request(
+                    to_email=settings.SMTP_FROM_EMAIL or settings.SMTP_USER,
+                    operation=operation, risk=risk, impact=impact, commands=[command],
+                    target_host=target_host, approval_id=approval["approval_id"])
+                result.update(email_sent=sent.get("success", False),
+                              success=sent.get("success", False), email_error=sent.get("error"))
+            return result
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
 
-        if not command and self._last_pending_command:
-            command = self._last_pending_command.get("command", "")
-            if not target_host:
-                target_host = self._last_pending_command.get("target_host", "")
-
-        to_email = settings.SMTP_FROM_EMAIL or settings.SMTP_USER or ""
-        commands_list = [command] if command else []
-        final_target_host = target_host or "远程服务器"
-
-        if to_email and operation:
-            try:
-                result = await _email_sender.send_approval_request(
-                    to_email=to_email,
-                    operation=operation,
-                    risk=risk,
-                    impact=impact,
-                    commands=commands_list,
-                    target_host=final_target_host,
-                )
-                if result.get("success"):
-                    return {
-                        "success": True,
-                        "email_sent": True,
-                        "approval_id": result.get("approval_id", ""),
-                        "to_email": to_email,
-                        "operation": operation,
-                        "risk": risk,
-                        "impact": impact,
-                        "message": f"审批邮件已发送至 {to_email}，审批ID: {result.get('approval_id','')}。回复邮件含 APPROVE 或 批准 即批准执行。",
-                        "next_step": "请使用 check_approval_status 工具检查审批状态，approval_id 为上述值。",
-                    }
-            except Exception as e:
-                logger.error(f"Failed to send approval email: {e}")
-
-        return {
-            "success": True,
-            "requires_confirmation": True,
-            "operation": operation,
-            "risk": risk,
-            "impact": impact,
-            "message": f"需要用户确认: {operation} (风险: {risk})",
-            "email_sent": False,
-            "email_error": "SMTP 不可用，请手动确认",
-        }
-    
     async def _send_approval_email(
-        self,
-        to_email: str,
-        operation: str,
-        risk: str,
-        impact: str,
-        commands: List[str],
-        target_host: str
+        self, to_email: str, operation: str, risk: str, impact: str,
+        commands: List[str], target_host: str
     ) -> Dict[str, Any]:
-        """
-        发送审批请求邮件
-        """
-        try:
-            from ..utils.email_sender import email_sender
-            
-            result = await email_sender.send_approval_request(
-                to_email=to_email,
-                operation=operation,
-                risk=risk,
-                impact=impact,
-                commands=commands,
-                target_host=target_host
-            )
-            
-            if result.get("success"):
-                approval_id = result.get("approval_id")
-                self._pending_approvals[approval_id] = {
-                    "operation": operation,
-                    "commands": commands,
-                    "target_host": target_host,
-                    "status": "pending"
-                }
-            
-            return result
-            
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def _check_approval_status(
-        self,
-        approval_id: str
-    ) -> Dict[str, Any]:
-        """
-        检查审批状态
-        """
-        try:
-            from ..utils.email_sender import email_sender
-            
-            result = await email_sender.check_approval(approval_id)
-            return result
-            
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+        """兼容旧工具入口，统一遵从当前审批策略。"""
+        return await self._ask_user_confirmation(operation, risk, impact, "\n".join(commands), target_host)
 
-    async def _wait_for_approval(
-        self,
-        approval_id: str,
-        timeout_seconds: int = 60
-    ) -> Dict[str, Any]:
-        """
-        等待审批完成（短轮询，每次 10 秒，默认 60 秒超时）
-        """
+    async def _check_approval_status(self, approval_id: str) -> Dict[str, Any]:
+        """读取当前会话的审批状态。"""
         try:
-            from ..utils.email_sender import email_sender
-            
-            result = await email_sender.wait_for_approval(
-                approval_id=approval_id,
-                timeout_seconds=timeout_seconds,
-                poll_interval=10,
-            )
+            approval = approval_service.get(approval_id)
+            if not approval or not approval_session.get() or approval.get("session_id") != approval_session.get():
+                return {"success": False, "error": "审批不存在或与当前会话不匹配"}
+            return {"success": True, "approval_id": approval_id,
+                    "status": approval["status"], "approved": approval["status"] == "approved",
+                    "approval": approval}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    async def _wait_for_approval(self, approval_id: str, timeout_seconds: int = 60) -> Dict[str, Any]:
+        """网页立即返回状态；邮件保留原有等待策略。"""
+        result = await self._check_approval_status(approval_id)
+        if not result.get("success") or result["approval"]["channel"] == "web":
             return result
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
+        from ..utils.email_sender import email_sender
+        return await email_sender.wait_for_approval(approval_id, timeout_seconds=timeout_seconds)
+
     async def _submit_diagnosis_result(
         self,
         problem_type: str,
@@ -768,6 +698,9 @@ class ToolRegistry:
         risk_level: str = "MEDIUM",
         confidence: str = "MEDIUM",
         analysis_summary: str = "",
+        conclusion_status: str = "inconclusive",
+        evidence_ids: List[str] = None,
+        cause_evidence_ids: List[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -784,76 +717,65 @@ class ToolRegistry:
             "risk_level": risk_level,
             "confidence": confidence,
             "analysis_summary": analysis_summary,
+            "conclusion_status": conclusion_status,
+            "evidence_ids": evidence_ids or [],
+            "cause_evidence_ids": cause_evidence_ids or [],
             "message": "诊断结果已提交",
             "extra_params": kwargs
         }
     
     async def _execute_approved_command(
-        self,
-        approval_id: str,
-        wait_for_approval: bool = True,
-        timeout_seconds: int = 3600
+        self, approval_id: str, wait_for_approval: bool = True, timeout_seconds: int = 3600
     ) -> Dict[str, Any]:
-        """
-        等待审批并执行命令（已审批通过的命令直接执行，跳过安全检查）
-        """
+        """只执行当前会话批准的持久化命令；执行占用成功后最多运行一次。"""
         try:
-            from ..utils.email_sender import email_sender
-            
-            if wait_for_approval:
-                result = await email_sender.wait_for_approval(
-                    approval_id=approval_id,
-                    timeout_seconds=timeout_seconds
-                )
-                
-                if not result.get("success"):
-                    return result
-                
-                if not result.get("approved"):
-                    return {
-                        "success": True,
-                        "approved": False,
-                        "message": "操作被拒绝"
-                    }
-                
-                approval = result.get("approval", {})
-                commands = approval.get("commands", [])
-                target_host = approval.get("target_host", "")
-                
-                execution_results = []
-                for cmd in commands:
-                    exec_result = await self._execute_direct(
-                        command=cmd,
-                        target_host=target_host
-                    )
-                    execution_results.append(exec_result)
-                
-                return {
-                    "success": True,
-                    "approved": True,
-                    "executed": True,
-                    "execution_results": execution_results
-                }
-            else:
-                return await self._check_approval_status(approval_id)
-                
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            state = await self._check_approval_status(approval_id)
+            if not state.get("success"):
+                return state
+            if state["approval"]["channel"] == "email" and wait_for_approval:
+                waited = await self._wait_for_approval(approval_id, timeout_seconds)
+                if not waited.get("success"):
+                    return waited
+            record, claimed = approval_service.claim_execution(approval_id, approval_session.get())
+            if not claimed:
+                if record.get("execution_result") is not None:
+                    return {**record["execution_result"], "replayed": True}
+                return {"success": record["status"] != "rejected", "executed": False,
+                        "approval_id": approval_id, "status": record["status"],
+                        "execution_status": record["execution_status"],
+                        "requires_confirmation": record["status"] == "pending"}
+            try:
+                results = []
+                for command in record["commands"]:
+                    if self._check_command_security(command, record["target_host"])["risk_level"] == RISK_HIGH:
+                        results.append({"success": False, "error": "L3 高风险命令禁止执行"})
+                        break
+                    item = await self._execute_direct(command, record["target_host"], record["ssh_user"])
+                    results.append(item)
+                    if not item.get("success"):
+                        break
+                result = {"success": bool(results) and all(r.get("success") for r in results),
+                          "approval_id": approval_id, "approved": True, "executed": True,
+                          "execution_results": results}
+            except Exception as exc:
+                result = {"success": False, "approval_id": approval_id, "executed": True, "error": str(exc)}
+            approval_service.finish_execution(approval_id, approval_session.get(), result)
+            return result
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
 
     async def _execute_direct(
         self,
         command: str,
-        target_host: str = ""
+        target_host: str = "",
+        ssh_user: str = ""
     ) -> Dict[str, Any]:
         """
         直接执行命令（跳过安全检查，仅用于已审批通过的命令）
         """
         try:
             if target_host:
-                effective_ssh_user = settings.SSH_USER or "jaci"
+                effective_ssh_user = ssh_user or settings.SSH_USER or "root"
                 ssh_opts = f"-o ConnectTimeout={settings.SSH_CONNECT_TIMEOUT}"
                 if not settings.SSH_STRICT_HOST_KEY_CHECK:
                     ssh_opts += " -o StrictHostKeyChecking=no"
@@ -1399,6 +1321,89 @@ class ToolRegistry:
                 "error": str(e)
             }
     
+    async def _probe_http(
+        self, url: str, target_host: str = "", ssh_user: str = "", timeout_seconds: int = 10,
+    ) -> Dict[str, Any]:
+        """固定只读 GET 探测，保留原始 URL、状态码与传输失败，不据此宣称业务健康。"""
+        base = {"requested_url": url, "target_host": target_host, "effective_url": None, "http_status": None,
+                "elapsed_ms": None, "transport_error": None, "body_excerpt": "",
+                "redirect_url": None, "redirect_count": 0, "follow_redirects": False,
+                "is_redirect": False,
+                "probe_attempted": False,
+                "health_verified": False, "verification_status": "insufficient_evidence"}
+        try:
+            parsed = urlsplit(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or any(ord(c) < 32 or ord(c) == 127 for c in url):
+                raise ValueError("URL必须是无控制字符的完整 http/https 地址")
+            if target_host and (target_host.startswith("-") or not re.fullmatch(r"[A-Za-z0-9_.:-]+", target_host)):
+                raise ValueError("目标主机格式无效")
+            if ssh_user and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", ssh_user):
+                raise ValueError("SSH用户名格式无效")
+            if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 120:
+                raise ValueError("探测超时必须为1至120秒整数")
+            if not target_host:
+                started = time.perf_counter()
+                try:
+                    async with httpx.AsyncClient(follow_redirects=False, timeout=timeout_seconds, trust_env=False) as client:
+                        response = await client.get(url)
+                    return {**base, "success": 200 <= response.status_code < 300,
+                            "probe_attempted": True,
+                            "effective_url": str(response.url), "http_status": response.status_code,
+                            "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+                            "body_excerpt": response.text[:2048], "redirect_url": response.headers.get("location"),
+                            "is_redirect": 300 <= response.status_code < 400,
+                            "content_type": response.headers.get("content-type", ""), "return_code": None,
+                            "verification_status": "http_response_only",
+                            "verification_note": "HTTP响应仅是该精确URL的证据；200壳页不证明业务功能或依赖正常。"}
+                except httpx.HTTPError as exc:
+                    return {**base, "success": False, "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+                            "probe_attempted": True,
+                            "transport_error": str(exc) or type(exc).__name__, "return_code": None,
+                            "verification_status": "transport_failed"}
+            marker = f"__DOTOPS_HTTP_{uuid.uuid4().hex}__"
+            write_out = "\\n" + marker + "%{http_code}\\t%{time_total}\\t%{url_effective}\\t%{redirect_url}\\t%{num_redirects}\\t%{content_type}\\n"
+            # 单个curl进程，无管道或后续命令，退出码直接代表本次请求。
+            command = " ".join(shlex.quote(part) for part in [
+                "curl", "--disable", "--silent", "--show-error", "--globoff",
+                "--request", "GET", "--proto", "=http,https", "--max-time", str(timeout_seconds),
+                "--write-out", write_out, "--url", url,
+            ])
+            execution = await self._execute_command(command, target_host or None,
+                timeout=timeout_seconds + 15, ssh_user=ssh_user or None)
+            if execution.get("requires_confirmation"):
+                return {**base, **execution}
+            output = execution.get("output", "")
+            body, found, tail = output.rpartition(marker)
+            if not found:
+                return {**base, "success": False, "transport_error": execution.get("error") or output.strip() or "curl未返回探测元数据",
+                        "return_code": execution.get("return_code")}
+            metadata, _, stderr = tail.partition("\n")
+            fields = metadata.split("\t")
+            if len(fields) != 6:
+                raise ValueError("curl探测元数据不完整")
+            status, elapsed, effective, redirect, count, content_type = fields
+            status_code = int(status) if status != "000" else None
+            transport_error = None if execution.get("success") else (stderr.strip() or execution.get("error") or "curl传输失败")
+            return {**base, "success": not transport_error and status_code is not None and 200 <= status_code < 300,
+                    "probe_attempted": True,
+                    "effective_url": effective, "http_status": status_code, "elapsed_ms": round(float(elapsed) * 1000, 3),
+                    "transport_error": transport_error, "body_excerpt": body.removesuffix("\n")[:2048],
+                    "redirect_url": redirect or None, "redirect_count": int(count), "is_redirect": bool(status_code and 300 <= status_code < 400),
+                    "content_type": content_type, "return_code": execution.get("return_code"),
+                    "verification_status": "http_response_only" if not transport_error else "transport_failed",
+                    "verification_note": "HTTP响应仅是该精确URL的证据；200壳页不证明业务功能或依赖正常。"}
+        except Exception as exc:
+            return {**base, "success": False, "transport_error": str(exc)}
+
+    async def _list_trace_services(self, lookback: str = "1h") -> Dict[str, Any]:
+        """发现 Tempo 内实际服务名，避免以业务别名查询后误判健康。"""
+        try:
+            from ..observability.tempo_query import TempoQueryClient
+            async with TempoQueryClient() as client:
+                return {"success": True, **await client.list_services(lookback)}
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "verification_status": "insufficient_evidence"}
+
     async def _analyze_trace(
         self,
         trace_id: str = None,
@@ -1459,6 +1464,15 @@ class ToolRegistry:
                     }
                 
                 else:
+                    available_services = None
+                    if service_name:
+                        discovered = await client.list_services(lookback)
+                        available_services = discovered["services"]
+                        if service_name not in available_services:
+                            return {"success": False, "unknown_service": True,
+                                    "service_name": service_name, "available_services": available_services,
+                                    "verification_status": "insufficient_evidence", "health_verified": False,
+                                    "error": "该查询窗口未发现此service.name，请使用实际服务名；这不证明服务健康。"}
                     if error_only:
                         result = await client.search_error_traces(
                             service_name=service_name,
@@ -1481,7 +1495,12 @@ class ToolRegistry:
                         )
                     
                     return {
-                        "success": True,
+                        "success": not bool(result.metrics.get("error")),
+                        "error": result.metrics.get("error"),
+                        "available_services": available_services,
+                        "health_verified": False,
+                        "verification_status": "insufficient_evidence" if not result.traces or result.metrics.get("error") else "trace_samples_only",
+                        "verification_note": "空结果不证明服务健康；错误过滤可能漏掉未采样、未标错或时间窗口外的失败。",
                         "total_traces": result.total,
                         "traces": result.traces[:limit],
                         "metrics": result.metrics,
@@ -2114,7 +2133,7 @@ class ToolRegistry:
                             },
                             "root_cause": {
                                 "type": "string",
-                                "description": "根本原因分析，详细说明导致问题的原因"
+                                "description": "用不超过120个汉字概括根因、故障服务与传播关系；未确认就明确说证据不足。详细过程放analysis_summary。"
                             },
                             "impact": {
                                 "type": "string",
@@ -2122,7 +2141,7 @@ class ToolRegistry:
                             },
                             "recommendation": {
                                 "type": "string",
-                                "description": "建议的修复操作或下一步行动"
+                                "description": "用不超过150个汉字说明下一步恢复操作及原业务请求复测方法，不重复分析过程，不声称已修复。"
                             },
                             "risk_level": {
                                 "type": "string",
@@ -2137,6 +2156,21 @@ class ToolRegistry:
                             "analysis_summary": {
                                 "type": "string",
                                 "description": "分析过程摘要，包括执行的检查命令和关键发现"
+                            },
+                            "conclusion_status": {
+                                "type": "string",
+                                "enum": ["confirmed", "suspected", "inconclusive"],
+                                "description": "confirmed=业务异常与原因有独立观察支持；suspected=尚待验证推测；inconclusive=未复现或证据不足。不能用空日志、空Trace或健康检查确认无故障。"
+                            },
+                            "evidence_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "引用本任务工具实际返回的 evidence_id；不得编造。HTTP根因确认应包含对应业务URL的异常探测及原因证据。"
+                            },
+                            "cause_evidence_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "evidence_ids中支持原因的独立证据，不可仅重复探测同一异常URL或引用健康检查/空Trace。confirmed必须提供。"
                             }
                         },
                         "required": ["problem_type", "root_cause", "impact", "recommendation"]
@@ -2432,6 +2466,29 @@ class ToolRegistry:
                         },
                         "required": ["alerts"]
                     }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_trace_services",
+                    "description": "读取Tempo中真实service.name标签值；按返回名称查询，不猜业务别名。",
+                    "parameters": {"type": "object", "properties": {
+                        "lookback": {"type": "string", "description": "回看窗口，默认1h，例如30m、24h"}
+                    }, "required": []}
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "probe_http",
+                    "description": "固定只读GET探测精确URL；本机使用httpx，远端通过SSH执行固定curl并遵守命令安全检查；不跟重定向、不改路径，返回HTTP状态、耗时、传输错误、正文片段。200壳页不证明业务正常。",
+                    "parameters": {"type": "object", "properties": {
+                        "url": {"type": "string", "description": "完整http/https URL，保留用户原始路径、协议和端口"},
+                        "target_host": {"type": "string", "description": "通过SSH从该主机发出探测；空值表示后端本机"},
+                        "ssh_user": {"type": "string", "description": "远程SSH用户名"},
+                        "timeout_seconds": {"type": "integer", "description": "请求超时秒数，默认10，范围1至120"}
+                    }, "required": ["url"]}
                 }
             },
             {

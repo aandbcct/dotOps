@@ -6,7 +6,7 @@ import type {
   Alert, ClusteredAlerts, AlertStats, AlertIngestResponse,
   TraceSearchResult, TraceDetail, ServiceDependency, TraceAnalysis,
   RCAReport, MetricsData, SystemHealth, ServiceInfo,
-  McpStatus, McpToolInfo, McpCallResult
+  McpStatus, McpToolInfo, McpCallResult, MultiAgentResponse
 } from '../types';
 
 const api = axios.create({
@@ -98,6 +98,28 @@ export const logsApi = {
 };
 
 export const agentApi = {
+  process: async (query: string, sessionId: string): Promise<MultiAgentResponse> => {
+    const response = await api.post('/multi-agent/process', { query, session_id: sessionId }, { timeout: 300000 });
+    return response.data;
+  },
+
+  getSession: async (sessionId: string): Promise<MultiAgentResponse> => {
+    const response = await api.get(`/multi-agent/sessions/${encodeURIComponent(sessionId)}`);
+    return response.data;
+  },
+
+  review: async (sessionId: string, approvalId: string, approved: boolean, reason?: string): Promise<MultiAgentResponse> => {
+    const response = await api.post(`/multi-agent/sessions/${encodeURIComponent(sessionId)}/review`, {
+        approval_id: approvalId, approved, reason,
+      }, { timeout: 300000 });
+    return response.data;
+  },
+
+  provideSshUser: async (sessionId: string, sshUser: string): Promise<MultiAgentResponse> => {
+    const response = await api.post(`/multi-agent/sessions/${encodeURIComponent(sessionId)}/ssh`, { ssh_user: sshUser });
+    return response.data;
+  },
+
   diagnose: async (request: DiagnoseRequest): Promise<DiagnoseResponse> => {
     const response = await api.post('/agent/diagnose', request);
     return response.data;

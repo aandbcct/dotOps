@@ -6,9 +6,20 @@ from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 
-from ..utils.email_sender import email_sender
+from ..utils.email_sender import email_sender, extract_approval_id
+from ..services.approval_service import approval_service
 
 router = APIRouter(prefix="/api/approval", tags=["approval"])
+
+
+def _reject_web_record(approval_id: str):
+    approval_id = approval_id.strip().lower()
+    try:
+        record = approval_service.get(approval_id)
+    except ValueError as exc:
+        raise HTTPException(422, "审批 ID 无效。") from exc
+    if record and record.get("channel", "email") != "email":
+        raise HTTPException(409, "请通过诊断会话页面处理网页审批。")
 
 
 class EmailReplyRequest(BaseModel):
@@ -41,21 +52,8 @@ async def process_email_reply(request: EmailReplyRequest):
     body = request.body.upper()
     subject = request.subject.upper()
     
-    approval_id = request.approval_id
-    
-    if not approval_id:
-        patterns = [
-            r'APPROVE\s+([A-Z0-9]{8})',
-            r'REJECT\s+([A-Z0-9]{8})',
-            r'审批ID[：:]\s*([A-Z0-9]{8})',
-            r'([A-Z0-9]{8})',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, subject + " " + body)
-            if match:
-                approval_id = match.group(1)
-                break
+    approval_id = (request.approval_id.strip().lower() if request.approval_id
+                   else extract_approval_id(subject + " " + body))
     
     if not approval_id:
         return {
@@ -63,6 +61,7 @@ async def process_email_reply(request: EmailReplyRequest):
             "error": "无法从邮件中解析审批ID"
         }
     
+    _reject_web_record(approval_id)
     approval = email_sender.approval_manager.get_approval(approval_id)
     
     if not approval:
@@ -145,6 +144,7 @@ async def manual_approve(approval_id: str, approved_by: str = "manual"):
     """
     手动批准操作
     """
+    _reject_web_record(approval_id)
     result = email_sender.approval_manager.approve(approval_id, approved_by)
     
     if not result:
@@ -163,6 +163,7 @@ async def manual_reject(approval_id: str, reason: str = ""):
     """
     手动拒绝操作
     """
+    _reject_web_record(approval_id)
     result = email_sender.approval_manager.reject(approval_id, reason)
     
     if not result:
@@ -183,6 +184,6 @@ async def list_pending_approvals():
     """
     return {
         "success": True,
-        "pending_count": len(email_sender.approval_manager.pending_approvals),
-        "pending_approvals": list(email_sender.approval_manager.pending_approvals.values())
+        "pending_count": len([r for r in email_sender.approval_manager.pending_approvals.values() if r.get("channel") != "web"]),
+        "pending_approvals": [r for r in email_sender.approval_manager.pending_approvals.values() if r.get("channel") != "web"]
     }
